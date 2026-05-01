@@ -1,0 +1,129 @@
+name: Release
+
+# Triggered when a tag matching v*.*.* is pushed.
+#
+# Phase A (current): builds an unsigned arm64 binary, packages a tarball,
+# and attaches it to the GitHub Release. Users on a different mac will see
+# Gatekeeper warnings; they'll need `xattr -d com.apple.quarantine`.
+#
+# Phase B (next): codesign with Developer ID Application + notarize via
+# `xcrun notarytool`, then `brew bump-formula-pr` against the
+# `supaku/homebrew-tools` tap so `brew install kith` resolves to a
+# bottled signed binary instead of building from source.
+#
+# Required GitHub secrets:
+#
+#   APPLE_DEVELOPER_ID_APP_CERT  base64 of the .p12 export
+#   APPLE_DEVELOPER_ID_APP_PASS  password protecting the .p12
+#   APPLE_NOTARY_APPLE_ID        Apple ID email
+#   APPLE_NOTARY_TEAM_ID         10-char team id
+#   APPLE_NOTARY_APP_PASSWORD    app-specific password (from appleid.apple.com)
+#
+# The signing/notarization step is wired but disabled until those secrets
+# are added.
+
+on:
+  push:
+    tags:
+      - 'v*.*.*'
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "Tag to release (e.g. v1.0.0)"
+        required: true
+
+jobs:
+  build:
+    runs-on: macos-15
+    permissions:
+      contents: write
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Resolve version
+        id: version
+        run: |
+          if [[ "${GITHUB_REF}" == refs/tags/* ]]; then
+            VERSION="${GITHUB_REF_NAME#v}"
+          else
+            VERSION="${{ inputs.tag }}"
+            VERSION="${VERSION#v}"
+          fi
+          echo "version=${VERSION}" >> "$GITHUB_OUTPUT"
+          echo "commit=$(git rev-parse --short HEAD)" >> "$GITHUB_OUTPUT"
+
+      - name: Stamp BuildInfo
+        run: |
+          BUILT_AT="$(date -u +"%Y-%m-%dT%H:%M:%SZ")"
+          cat > Sources/kith/Generated/BuildInfo.swift <<EOF
+          import Foundation
+
+          enum BuildInfo {
+              static let name = "kith"
+              static let version = "${{ steps.version.outputs.version }}"
+              static let commit = "${{ steps.version.outputs.commit }}"
+              static let platform = "macOS 14+"
+              static let builtAt = "${BUILT_AT}"
+          }
+          EOF
+
+      - name: swift build -c release
+        run: swift build -c release --arch arm64
+
+      - name: Sign + notarize (Phase B; skipped until secrets are present)
+        if: ${{ env.APPLE_DEVELOPER_ID_APP_CERT != '' }}
+        env:
+          APPLE_DEVELOPER_ID_APP_CERT: ${{ secrets.APPLE_DEVELOPER_ID_APP_CERT }}
+          APPLE_DEVELOPER_ID_APP_PASS: ${{ secrets.APPLE_DEVELOPER_ID_APP_PASS }}
+          APPLE_NOTARY_APPLE_ID:       ${{ secrets.APPLE_NOTARY_APPLE_ID }}
+          APPLE_NOTARY_TEAM_ID:        ${{ secrets.APPLE_NOTARY_TEAM_ID }}
+          APPLE_NOTARY_APP_PASSWORD:   ${{ secrets.APPLE_NOTARY_APP_PASSWORD }}
+        run: |
+          # Import cert into a temporary keychain.
+          KEYCHAIN_PATH="$RUNNER_TEMP/build.keychain-db"
+          KEYCHAIN_PASS="$(uuidgen)"
+          security create-keychain -p "$KEYCHAIN_PASS" "$KEYCHAIN_PATH"
+          security set-keychain-settings -lut 21600 "$KEYCHAIN_PATH"
+          security unlock-keychain -p "$KEYCHAIN_PASS" "$KEYCHAIN_PATH"
+
+          CERT_PATH="$RUNNER_TEMP/cert.p12"
+          echo -n "$APPLE_DEVELOPER_ID_APP_CERT" | base64 --decode > "$CERT_PATH"
+          security import "$CERT_PATH" -k "$KEYCHAIN_PATH" -P "$APPLE_DEVELOPER_ID_APP_PASS" -T /usr/bin/codesign
+          security list-keychains -d user -s "$KEYCHAIN_PATH" $(security list-keychains -d user | tr -d '"')
+          security set-key-partition-list -S apple-tool:,apple:,codesign: -s -k "$KEYCHAIN_PASS" "$KEYCHAIN_PATH"
+
+          IDENTITY="$(security find-identity -v -p codesigning "$KEYCHAIN_PATH" | awk -F'"' '/Developer ID Application/ {print $2; exit}')"
+          codesign --options runtime --force --timestamp --sign "$IDENTITY" .build/release/kith
+          codesign -dvvv .build/release/kith
+
+          # Notarize.
+          ZIP_PATH="$RUNNER_TEMP/kith.zip"
+          ditto -c -k --keepParent .build/release/kith "$ZIP_PATH"
+          xcrun notarytool submit "$ZIP_PATH" \
+            --apple-id "$APPLE_NOTARY_APPLE_ID" \
+            --team-id  "$APPLE_NOTARY_TEAM_ID" \
+            --password "$APPLE_NOTARY_APP_PASSWORD" \
+            --wait
+          # Stapling makes the notarization travel with the artifact.
+          xcrun stapler staple .build/release/kith || true
+
+      - name: Package tarball
+        run: |
+          mkdir -p dist
+          ARCHIVE="dist/kith-${{ steps.version.outputs.version }}-macos-arm64.tar.gz"
+          tar -C .build/release -czf "$ARCHIVE" kith
+          shasum -a 256 "$ARCHIVE" > "$ARCHIVE.sha256"
+          ls -lh dist/
+
+      - name: Create or update GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: v${{ steps.version.outputs.version }}
+          name: kith ${{ steps.version.outputs.version }}
+          generate_release_notes: true
+          files: |
+            dist/kith-${{ steps.version.outputs.version }}-macos-arm64.tar.gz
+            dist/kith-${{ steps.version.outputs.version }}-macos-arm64.tar.gz.sha256
