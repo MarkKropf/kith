@@ -19,7 +19,7 @@ class Kith < Formula
   desc "macOS CLI bridging Apple Contacts and iMessage for terminal users + AI agents"
   homepage "https://github.com/supaku/kith"
   url "https://github.com/supaku/kith.git",
-      tag:      "v1.0.0",
+      tag:      "v0.1.0",
       revision: ""    # filled in by `brew bump-formula-pr` on releases
   license "MIT"
   head "https://github.com/supaku/kith.git", branch: "main"
