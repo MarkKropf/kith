@@ -13,7 +13,9 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        os: [macos-14, macos-15]
+        # macos-14's latest Xcode (16.0) ships Swift 6.0; SQLite.swift requires
+        # swift-tools 6.1. Keep macOS 14 as a deployment target, but build on 15.
+        os: [macos-15]
 
     steps:
       - name: Checkout
