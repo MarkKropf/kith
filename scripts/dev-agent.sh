@@ -45,10 +45,13 @@ build() {
   # Unified identifier (see scripts/sign-and-notarize.sh): TCC attributes
   # the agent's CN requests to com.supaku.kith — a LaunchServices-
   # registered bundle — so "Kith" shows up in System Settings normally.
+  # Entitlements include the addressbook entitlement required for TCC
+  # to display the prompt under hardened runtime.
+  ENTITLEMENTS="$REPO_ROOT/Sources/KithApp/Resources/Entitlements.plist"
   codesign --force --options runtime --sign "$DEV_IDENTITY" \
-    --identifier com.supaku.kith "$KITH_BIN"
+    --identifier com.supaku.kith --entitlements "$ENTITLEMENTS" "$KITH_BIN"
   codesign --force --options runtime --sign "$DEV_IDENTITY" \
-    --identifier com.supaku.kith "$AGENT_BIN"
+    --identifier com.supaku.kith --entitlements "$ENTITLEMENTS" "$AGENT_BIN"
 }
 
 write_plist() {

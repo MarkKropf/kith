@@ -2,8 +2,8 @@ import Foundation
 
 enum BuildInfo {
     static let name = "kith"
-    static let version = "0.2.2"
-    static let commit = "adf7d42"
+    static let version = "0.2.3"
+    static let commit = "914691a"
     static let platform = "macOS 14+"
-    static let builtAt = "2026-05-01T21:56:57Z"
+    static let builtAt = "2026-05-01T22:15:42Z"
 }

@@ -47,6 +47,50 @@ set -euo pipefail
 REPO_ROOT="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$REPO_ROOT"
 
+# Cleanup hook — runs on success AND failure (via EXIT trap).
+#
+# The rehearsal's _AGENT step installs a dev/notarized Kith.app to
+# ~/Applications and registers its LaunchAgent. If we leave it sitting
+# there, the next `brew install --cask kith` lays down a NEW
+# /Applications/Kith.app but the old LaunchAgent registration keeps
+# routing XPC to the rehearsal install — except that bundle's been wiped
+# from disk on subsequent reruns, so launchd is sometimes serving a
+# zombie KithAgent process whose signing identity no longer matches the
+# brew-installed CLI. Symptom: `kith find` after a `brew install` fails
+# with "agent rejected client (code-signature mismatch)" until the user
+# manually boots it out.
+#
+# Set KITH_REHEARSE_KEEP_INSTALL=1 to skip cleanup (e.g., when you want
+# to poke at the staged install in System Settings).
+cleanup_rehearsal_install() {
+  # Always clean up the temp extract dir if we made one.
+  if [[ -n "${EXTRACT_DIR:-}" ]]; then
+    rm -rf "$EXTRACT_DIR" 2>/dev/null || true
+  fi
+
+  if [[ "${KITH_REHEARSE_KEEP_INSTALL:-0}" == "1" ]]; then
+    echo "skip cleanup: KITH_REHEARSE_KEEP_INSTALL=1 set; rehearsal install left at ~/Applications/Kith.app"
+    return 0
+  fi
+  # Only do agent cleanup if the rehearsal actually touched the
+  # LaunchAgent / ~/Applications. Otherwise we'd churn other people's
+  # state for nothing.
+  if [[ "${KITH_REHEARSE_AGENT:-0}" != "1" && "${KITH_REHEARSE_NOTARIZE:-0}" != "1" ]]; then
+    return 0
+  fi
+  echo
+  echo "==> cleanup: bootout LaunchAgent + remove ~/Applications/Kith.app"
+  /bin/launchctl bootout "gui/$UID/com.supaku.kith.agent" 2>/dev/null || true
+  rm -rf "$HOME/Applications/Kith.app" 2>/dev/null || true
+  # Pull any zombie KithAgent processes the bootout missed (file handles
+  # held even after the bundle was rm'd).
+  for pid in $(pgrep -f "Contents/MacOS/KithAgent" 2>/dev/null); do
+    kill -TERM "$pid" 2>/dev/null || true
+  done
+  echo "    cleanup done. (Set KITH_REHEARSE_KEEP_INSTALL=1 to keep the install next time.)"
+}
+trap cleanup_rehearsal_install EXIT
+
 # shellcheck source=/dev/null
 source version.env
 
@@ -64,18 +108,21 @@ bash scripts/package.sh stage "$STAGE"
 if [[ "${KITH_REHEARSE_DEV_SIGN:-0}" == "1" ]]; then
   echo "==> KITH_REHEARSE_DEV_SIGN=1 — sign Kith.app + CLI with local Developer ID"
   echo "    identity: $DEV_ID"
-  # Unified identifier: see scripts/sign-and-notarize.sh for the why.
+  # Unified identifier + entitlements: see scripts/sign-and-notarize.sh
+  # for the rationale (TCC needs the addressbook entitlement to even
+  # display its prompt under hardened runtime).
+  ENTITLEMENTS="$REPO_ROOT/Sources/KithApp/Resources/Entitlements.plist"
   codesign --options runtime --force --timestamp \
-    --identifier com.supaku.kith --sign "$DEV_ID" \
+    --identifier com.supaku.kith --entitlements "$ENTITLEMENTS" --sign "$DEV_ID" \
     "$STAGE/Kith.app/Contents/MacOS/KithAgent"
   codesign --options runtime --force --timestamp \
-    --identifier com.supaku.kith --sign "$DEV_ID" \
+    --identifier com.supaku.kith --entitlements "$ENTITLEMENTS" --sign "$DEV_ID" \
     "$STAGE/Kith.app/Contents/MacOS/KithApp"
   codesign --options runtime --force --timestamp \
-    --identifier com.supaku.kith --sign "$DEV_ID" \
+    --identifier com.supaku.kith --entitlements "$ENTITLEMENTS" --sign "$DEV_ID" \
     "$STAGE/Kith.app"
   codesign --options runtime --force --timestamp \
-    --identifier com.supaku.kith --sign "$DEV_ID" \
+    --identifier com.supaku.kith --entitlements "$ENTITLEMENTS" --sign "$DEV_ID" \
     "$STAGE/libexec/kith"
   codesign --verify --deep --strict "$STAGE/Kith.app"
   codesign --verify "$STAGE/libexec/kith"
@@ -133,7 +180,10 @@ echo "==> tarball"
 bash scripts/package.sh tarball "$STAGE" "$ARCHIVE"
 
 EXTRACT="$(mktemp -d)"
-trap 'rm -rf "$EXTRACT"' EXIT
+# DON'T overwrite the EXIT trap — that would clobber cleanup_rehearsal_install.
+# Compose: the cleanup function handles BOTH the temp extract dir and the
+# ~/Applications install state. Single trap, single cleanup point.
+EXTRACT_DIR="$EXTRACT"
 tar -C "$EXTRACT" -xzf "$ARCHIVE"
 
 # Verify the layout the cask installs.
@@ -220,26 +270,34 @@ if [[ "${KITH_REHEARSE_AGENT:-0}" == "1" ]]; then
   fi
   echo "    agent reachable; XPC round-trip OK."
 
-  # Notarized .app should be able to display TCC prompts. We can't fully
-  # automate "the user clicks Allow," but we CAN verify that `kith find`
-  # returns either success (already granted) or contactsNotDetermined
-  # (auto-bootstrap fired the prompt) — what we DON'T want to see is
-  # PERMISSION_DENIED with the bare message, which means macOS auto-denied
-  # the prompt request (the v0.2.1 bug). Only run this assertion in
-  # NOTARIZE mode since dev-signed builds always auto-deny.
+  # Notarized .app should be able to display TCC prompts. The strongest
+  # automated check we can do without interactive user input: scrape
+  # tccd's log AFTER the request to look for the smoking-gun "Policy
+  # disallows prompt" entry that fires when an entitlement is missing
+  # (the v0.2.2 bug). Either of two outcomes is acceptable: prompt
+  # actually shown (user can click Allow / Don't Allow), OR pre-existing
+  # grant state (granted/denied) returned without prompting. What we
+  # reject: silent auto-deny because the entitlement is missing.
   if [[ "${KITH_REHEARSE_NOTARIZE:-0}" == "1" ]]; then
     echo "==> verify TCC prompt path is reachable on notarized .app"
-    echo "    (If a system prompt appears asking about Contacts, click Allow"
-    echo "    to verify the full first-run flow. Otherwise the rehearsal"
-    echo "    confirms the agent is at least reaching the TCC layer cleanly.)"
-    find_out="$(KITH_BOOTSTRAP_APP_PATH="$USER_APPS/Kith.app" "$EXTRACT/kith-link" find --name "kith-rehearsal-impossible-name-$$" --jsonl --limit 1 2>&1 || true)"
-    if echo "$find_out" | grep -q "Contacts access denied"; then
-      echo "FAIL: notarized .app got Contacts access auto-denied — TCC prompt path is broken." >&2
-      echo "      stderr was:" >&2
-      echo "$find_out" >&2
+    echo "    A 'Kith would like to access your Contacts' prompt MAY appear."
+    echo "    (Click Allow / Don't Allow as you wish; the rehearsal only"
+    echo "    asserts the prompt path is unblocked, not the user's choice.)"
+    rehearsal_marker_start="$(date '+%Y-%m-%d %H:%M:%S')"
+    KITH_BOOTSTRAP_APP_PATH="$USER_APPS/Kith.app" "$EXTRACT/kith-link" \
+      find --name "kith-rehearsal-impossible-name-$$" --jsonl --limit 1 \
+      >/dev/null 2>&1 || true
+    sleep 2  # let tccd flush its log
+    tcc_log="$(/usr/bin/log show --start "$rehearsal_marker_start" --predicate 'process == "tccd"' --info 2>/dev/null || true)"
+    if echo "$tcc_log" | grep -q "Policy disallows prompt.*com.supaku.kith"; then
+      echo "FAIL: tccd refused to display Contacts prompt — entitlement likely missing." >&2
+      echo "      Look for 'requires entitlement com.apple.security.personal-information.addressbook'" >&2
+      echo "      in the tccd log. The fix is to sign Kith.app + KithAgent + KithApp with that" >&2
+      echo "      entitlement; see Sources/KithApp/Resources/Entitlements.plist." >&2
+      echo "$tcc_log" | grep -iE "kith|entitlement|disallow" | head -20 >&2
       exit 1
     fi
-    echo "    TCC prompt path OK (no auto-deny)."
+    echo "    TCC prompt path OK (tccd accepted the request; no entitlement violation)."
   fi
 else
   echo

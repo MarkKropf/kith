@@ -1,0 +1,24 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<!--
+  Codesign entitlements for KithApp + KithAgent under hardened runtime.
+
+  `com.apple.security.personal-information.addressbook` is REQUIRED for
+  CNContactStore.requestAccess() to display its system prompt. Without
+  it, macOS's tccd silently auto-denies and the user never sees a
+  prompt — the symptom that bit v0.2.1/0.2.2 ("no popup, no record in
+  System Settings"). The entitlement just unlocks the prompt path; the
+  user still has to click Allow to actually grant access. NSContactsUsage
+  Description in Info.plist provides the prompt's explanatory string.
+
+  Full Disk Access (~/Library/Messages/chat.db) is NOT covered by an
+  entitlement — Apple gates it behind manual user enrollment in
+  System Settings → Privacy & Security → Full Disk Access. We document
+  that flow in `kith doctor`'s hint text and the cask caveats.
+-->
+<plist version="1.0">
+<dict>
+    <key>com.apple.security.personal-information.addressbook</key>
+    <true/>
+</dict>
+</plist>

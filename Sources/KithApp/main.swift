@@ -1,6 +1,19 @@
+import AppKit
 import Contacts
 import Foundation
 import ServiceManagement
+
+// Initialize AppKit with .accessory activation policy. CNContactStore's
+// `requestAccess` displays its prompt via the AppKit run-loop machinery —
+// without an NSApplication infrastructure to host the dialog, macOS fails
+// fast with "Access Denied" instead of presenting the prompt. `.accessory`
+// gives us the AppKit context needed to display the prompt, but doesn't
+// add a Dock icon or menu bar (consistent with LSUIElement=true). Activate
+// with `ignoringOtherApps: true` so the prompt actually surfaces above
+// whatever the user is currently focused on.
+let nsApp = NSApplication.shared
+nsApp.setActivationPolicy(.accessory)
+nsApp.activate(ignoringOtherApps: true)
 
 // KithApp
 //
@@ -48,15 +61,24 @@ func requestContactsAccess() {
         return
     }
 
-    let semaphore = DispatchSemaphore(value: 0)
+    // Pump the AppKit run loop while the request is in flight. A blocking
+    // semaphore.wait() would freeze the main thread and the system's
+    // prompt would never display — TCC prompts ride on the run loop.
+    var done = false
     let store = CNContactStore()
     store.requestAccess(for: .contacts) { granted, error in
         let outcome = granted ? "granted" : "denied"
         let detail = error.map { " (\($0.localizedDescription))" } ?? ""
         FileHandle.standardError.write(Data("Kith: contacts auth post-prompt = \(outcome)\(detail)\n".utf8))
-        semaphore.signal()
+        done = true
     }
-    semaphore.wait()
+    let deadline = Date().addingTimeInterval(60)
+    while !done && Date() < deadline {
+        RunLoop.main.run(mode: .default, before: Date(timeIntervalSinceNow: 0.05))
+    }
+    if !done {
+        FileHandle.standardError.write(Data("Kith: contacts prompt timed out after 60s\n".utf8))
+    }
 }
 
 switch action {

@@ -93,12 +93,23 @@ if [[ -z "$IDENTITY" ]]; then
 fi
 
 # ---- Sign the CLI binary ------------------------------------------------------
+# The CLI doesn't make CN calls itself (it routes through the agent), so
+# strictly speaking it doesn't need the addressbook entitlement. We sign
+# it with the same entitlements as the agent for consistency and to keep
+# `KITH_DB_PATH` local-mode (which DOES open Contacts directly) working.
+ENTITLEMENTS="$REPO_ROOT/Sources/KithApp/Resources/Entitlements.plist"
+if [[ ! -f "$ENTITLEMENTS" ]]; then
+  echo "error: entitlements file missing: $ENTITLEMENTS" >&2
+  exit 1
+fi
+
 echo "==> codesign $CLI_BIN with $IDENTITY"
 codesign \
   --options runtime \
   --force \
   --timestamp \
   --identifier com.supaku.kith \
+  --entitlements "$ENTITLEMENTS" \
   --sign "$IDENTITY" \
   "$CLI_BIN"
 codesign -dvvv "$CLI_BIN"
@@ -123,6 +134,7 @@ codesign \
   --force \
   --timestamp \
   --identifier com.supaku.kith \
+  --entitlements "$ENTITLEMENTS" \
   --sign "$IDENTITY" \
   "$APP_BUNDLE/Contents/MacOS/KithAgent"
 
@@ -132,6 +144,7 @@ codesign \
   --force \
   --timestamp \
   --identifier com.supaku.kith \
+  --entitlements "$ENTITLEMENTS" \
   --sign "$IDENTITY" \
   "$APP_BUNDLE/Contents/MacOS/KithApp"
 
@@ -145,6 +158,7 @@ codesign \
   --force \
   --timestamp \
   --identifier com.supaku.kith \
+  --entitlements "$ENTITLEMENTS" \
   --sign "$IDENTITY" \
   "$APP_BUNDLE"
 codesign -dvvv "$APP_BUNDLE"

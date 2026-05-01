@@ -120,6 +120,7 @@ let package = Package(
                 "Resources/com.supaku.kith.agent.plist",
                 "Resources/AppIcon.icns",
                 "Resources/AppIcon.svg",
+                "Resources/Entitlements.plist",
             ]
         ),
         .testTarget(name: "ContactsCoreTests", dependencies: ["ContactsCore"]),
