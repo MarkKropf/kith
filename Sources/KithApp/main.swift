@@ -1,3 +1,4 @@
+import Contacts
 import Foundation
 import ServiceManagement
 
@@ -10,15 +11,53 @@ import ServiceManagement
 //   - `kith` CLI on first invoke when the Mach service isn't yet registered
 //   - Cask postflight (`brew install --cask kith` triggers a one-time launch)
 //
-// Has no UI, no Dock icon (LSUIElement=true in Info.plist). The actual TCC
-// prompt fires later, when the agent makes its first CNContactStore call —
-// the prompt is named "Kith" and reads the NSContactsUsageDescription from
-// this .app's Info.plist.
+// Has no Dock icon (LSUIElement=true in Info.plist). It does, however, fire
+// the TCC prompt for Contacts during `register` — the prompt comes from the
+// .app's own context (where Bundle.main is Kith.app and the
+// NSContactsUsageDescription string is found), not from the agent's. A
+// background LaunchAgent has no foreground UI to host the system prompt, so
+// running it from there silently gets `.denied` even with the right Info.plist
+// — that's the difference between v0.2.1 and v0.2.2.
 
 let plistName = "com.supaku.kith.agent.plist"
 let agent = SMAppService.agent(plistName: plistName)
 
 let action = CommandLine.arguments.dropFirst().first ?? "register"
+
+/// Request Contacts access from this .app's UI context. Blocks until the
+/// user clicks Allow / Don't Allow, or returns immediately if the system
+/// already has a recorded answer (.granted or .denied). Logs the outcome
+/// to stderr so the calling shell sees what happened.
+func requestContactsAccess() {
+    let status = CNContactStore.authorizationStatus(for: .contacts)
+    let pre: String = {
+        switch status {
+        case .notDetermined:     return "not-determined"
+        case .restricted:        return "restricted"
+        case .denied:            return "denied"
+        case .authorized:        return "authorized"
+        @unknown default:        return "unknown"
+        }
+    }()
+    FileHandle.standardError.write(Data("Kith: contacts auth pre-prompt = \(pre)\n".utf8))
+
+    guard status == .notDetermined else {
+        // Either already granted (nothing to do) or already denied (prompt
+        // won't fire — user must enable in System Settings). Surface the
+        // current status and let the caller act.
+        return
+    }
+
+    let semaphore = DispatchSemaphore(value: 0)
+    let store = CNContactStore()
+    store.requestAccess(for: .contacts) { granted, error in
+        let outcome = granted ? "granted" : "denied"
+        let detail = error.map { " (\($0.localizedDescription))" } ?? ""
+        FileHandle.standardError.write(Data("Kith: contacts auth post-prompt = \(outcome)\(detail)\n".utf8))
+        semaphore.signal()
+    }
+    semaphore.wait()
+}
 
 switch action {
 case "register":
@@ -29,6 +68,17 @@ case "register":
         FileHandle.standardError.write(Data("Kith: registration failed: \(error)\n".utf8))
         exit(1)
     }
+    // Trigger the Contacts TCC prompt from this .app's UI context. This is
+    // the right side of the responsibility chain to host the prompt; the
+    // background agent can't display one. Skipped silently if status is
+    // already granted/denied.
+    requestContactsAccess()
+
+case "request-contacts":
+    // Standalone path the CLI can invoke (`open -a Kith.app --args
+    // request-contacts`) to re-prompt without re-registering. Useful when
+    // the user wants to grant access after dismissing the initial prompt.
+    requestContactsAccess()
 
 case "unregister":
     do {
@@ -50,7 +100,7 @@ case "status":
     print(label)
 
 default:
-    FileHandle.standardError.write(Data("Kith: unknown action '\(action)' (expected: register | unregister | status)\n".utf8))
+    FileHandle.standardError.write(Data("Kith: unknown action '\(action)' (expected: register | request-contacts | unregister | status)\n".utf8))
     exit(2)
 }
 

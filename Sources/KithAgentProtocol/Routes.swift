@@ -14,6 +14,11 @@ public let kithAgentMachServiceName = "com.supaku.kith.agent"
 /// stable, typed error shape.
 public enum KithWireError: Error, Codable, Sendable {
     case permissionDenied(String)
+    /// Contacts/FDA is in a `.notDetermined` state — the user hasn't been
+    /// prompted yet. Distinct from `permissionDenied` so the client can
+    /// auto-bootstrap (`open -a Kith.app --args request-contacts`) to
+    /// trigger the system prompt from a foreground UI context, then retry.
+    case contactsNotDetermined(String)
     case notFound(String)
     case ambiguous(String, candidates: [Contact])
     case dbUnavailable(String)

@@ -83,6 +83,13 @@ enum RunHelpers {
         switch err {
         case .permissionDenied(let m):
             return ErrorReporter.emit(.permissionDenied, message: m, hint: "Run `kith doctor` for permission details.", machine: machine)
+        case .contactsNotDetermined(let m):
+            return ErrorReporter.emit(
+                .permissionDenied,
+                message: m,
+                hint: "Run `open -a /Applications/Kith.app --args request-contacts` to fire the system prompt manually.",
+                machine: machine
+            )
         case .notFound(let m):
             return ErrorReporter.emit(.notFound, message: m, machine: machine)
         case .ambiguous(let m, let candidates):

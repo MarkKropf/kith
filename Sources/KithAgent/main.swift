@@ -18,7 +18,7 @@ import SecureXPC
 // and is registered via `SMAppService.agent(plistName:).register()` from
 // the Kith.app GUI bootstrap target.
 
-let agentVersion = "0.2.1"
+let agentVersion = "0.2.2"
 
 let normalizer = KithPhoneNumberNormalizer()
 let contactsStore = CNBackedContactsStore(normalizer: normalizer)

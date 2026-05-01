@@ -45,11 +45,12 @@ bash scripts/package.sh stage "$STAGE"
 if [[ "${KITH_REHEARSE_DEV_SIGN:-0}" == "1" ]]; then
   echo "==> KITH_REHEARSE_DEV_SIGN=1 — sign Kith.app + CLI with local Developer ID"
   echo "    identity: $DEV_ID"
+  # Unified identifier: see scripts/sign-and-notarize.sh for the why.
   codesign --options runtime --force --timestamp \
-    --identifier com.supaku.kith.agent --sign "$DEV_ID" \
+    --identifier com.supaku.kith --sign "$DEV_ID" \
     "$STAGE/Kith.app/Contents/MacOS/KithAgent"
   codesign --options runtime --force --timestamp \
-    --identifier com.supaku.kith.app --sign "$DEV_ID" \
+    --identifier com.supaku.kith --sign "$DEV_ID" \
     "$STAGE/Kith.app/Contents/MacOS/KithApp"
   codesign --options runtime --force --timestamp \
     --identifier com.supaku.kith --sign "$DEV_ID" \
@@ -118,12 +119,25 @@ if [[ "${KITH_REHEARSE_AGENT:-0}" == "1" ]]; then
   cp -R "$STAGE/Kith.app" "$USER_APPS/Kith.app"
 
   echo "==> launching Kith.app (register LaunchAgent)"
+  # KithApp.register fires a Contacts TCC prompt as part of its register
+  # flow on macOS 14+. The local-dev-signed (unnotarized) build is
+  # spctl-rejected, so the prompt is auto-denied and the .app exits
+  # quickly — that's expected here. In production (notarized) the prompt
+  # actually shows. We only care about whether the agent registered.
   /usr/bin/open -a "$USER_APPS/Kith.app" --args register
-  # SMAppService.register() returns ~immediately; give launchd a moment.
-  sleep 3
 
-  if ! /bin/launchctl print "gui/$UID/com.supaku.kith.agent" >/dev/null 2>&1; then
-    echo "FAIL: com.supaku.kith.agent not registered with launchd after Kith.app launch." >&2
+  # Poll launchctl print up to ~10s — SMAppService.register() can take a
+  # second on busy systems, and we don't want a flaky 3s sleep.
+  registered=0
+  for _ in $(seq 1 20); do
+    if /bin/launchctl print "gui/$UID/com.supaku.kith.agent" >/dev/null 2>&1; then
+      registered=1
+      break
+    fi
+    sleep 0.5
+  done
+  if [[ "$registered" != "1" ]]; then
+    echo "FAIL: com.supaku.kith.agent not registered with launchd within 10s." >&2
     echo "      Common cause: Kith.app isn't signed with a Developer ID. Re-run with" >&2
     echo "      KITH_REHEARSE_DEV_SIGN=1 to sign locally." >&2
     exit 1

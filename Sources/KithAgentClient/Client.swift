@@ -129,33 +129,45 @@ public final class KithAgentClient: @unchecked Sendable {
 
     // MARK: - Bootstrap-and-retry plumbing
 
-    /// Run `block`. If it surfaces `agentUnreachable` (no Mach service)
-    /// OR `clientNotAccepted` (signing requirement mismatch — usually
-    /// caused by a stale registration pointing at an old bundle), run a
-    /// one-time bootstrap (`open -a Kith.app --args register`), wait for
-    /// the Mach service, and retry the block once.
+    /// Run `block`. If it surfaces a bootstrap-eligible error (Mach
+    /// service missing, signing mismatch from a stale registration, or
+    /// Contacts in `.notDetermined` state), run a one-time bootstrap and
+    /// retry the block once.
     ///
-    /// `clientNotAccepted` is treated as bootstrap-eligible because the
-    /// fix in practice is always the same: re-run SMAppService.register()
-    /// against the canonical bundle path, which updates BTM to point at
-    /// the current install location.
+    /// Bootstrap actions, by error class:
+    ///   - `.agentUnreachable` / `.clientNotAccepted`
+    ///                  → `open -a Kith.app --args register`
+    ///                    (registers the LaunchAgent against the current
+    ///                    bundle path; updates BTM)
+    ///   - `agentReturnedError(.contactsNotDetermined)`
+    ///                  → `open -a Kith.app --args request-contacts`
+    ///                    (fires the system TCC prompt from the .app's
+    ///                    foreground UI context — the agent itself is a
+    ///                    background process and can't host the prompt).
     private func retryAfterBootstrap<R>(_ block: () async throws -> R) async throws -> R {
         do {
             return try await self.invoke(block)
         } catch let err as KithAgentClientError {
+            let action: String
             switch err {
             case .agentUnreachable, .clientNotAccepted:
-                break
+                action = "register"
+            case .agentReturnedError(let underlying):
+                if let wire = underlying as? KithWireError, case .contactsNotDetermined = wire {
+                    action = "request-contacts"
+                } else {
+                    throw err
+                }
             default:
                 throw err
             }
             do {
-                try await Self.runBootstrap()
+                try await Self.runBootstrap(action: action)
             } catch let bootErr {
                 throw KithAgentClientError.bootstrapFailed(bootstrap: bootErr, original: err)
             }
-            // Retry once. Anything that surfaces from this attempt — including
-            // a second connectivity error — is the final answer.
+            // Retry once. Anything that surfaces from this attempt is the
+            // final answer.
             return try await self.invoke(block)
         }
     }
@@ -171,45 +183,57 @@ public final class KithAgentClient: @unchecked Sendable {
         }
     }
 
-    /// Run `open -a Kith.app --args register`, wait for the Mach service
-    /// to come up by polling `system.ping` until success or timeout.
-    private static func runBootstrap() async throws {
+    /// Run `open -a Kith.app --args <action>` and wait for it to settle.
+    ///
+    /// `action` is one of:
+    ///   - `"register"`         → `SMAppService.agent.register()` + then
+    ///                            requests Contacts access if the auth
+    ///                            state is .notDetermined. KithApp handles
+    ///                            both. We poll `system.ping` after to
+    ///                            confirm the Mach service is alive.
+    ///   - `"request-contacts"` → only fires the Contacts TCC prompt.
+    ///                            We do NOT poll system.ping (the agent
+    ///                            may already be running). Just wait for
+    ///                            KithApp to exit.
+    private static func runBootstrap(action: String) async throws {
         let appPath = bootstrapAppPath
         let process = Process()
         process.executableURL = URL(fileURLWithPath: "/usr/bin/open")
-        process.arguments = ["-a", appPath, "--args", "register"]
-        // `open -a` returns immediately once it dispatches the launch — the
-        // KithApp binary then runs `SMAppService.agent(...).register()` in
-        // the background. We wait for the Mach service ourselves below.
+        // `-W` makes `open` block until the launched .app exits — which is
+        // what we want, because KithApp's `request-contacts` action blocks
+        // on a synchronous semaphore until the user clicks Allow / Don't
+        // Allow on the TCC prompt.
+        process.arguments = ["-W", "-a", appPath, "--args", action]
         try process.run()
         process.waitUntilExit()
 
-        // Poll for service availability. Each ping uses a fresh XPCClient
-        // so we don't reuse a connection that may have cached a "service
-        // does not exist" failure on the first attempt.
-        let deadline = Date().addingTimeInterval(bootstrapTimeout)
-        var lastError: Error? = nil
-        while Date() < deadline {
-            try? await Task.sleep(nanoseconds: 250_000_000) // 250 ms
-            do {
-                let probe = XPCClient.forMachService(
-                    named: kithAgentMachServiceName,
-                    withServerRequirement: .sameTeamIdentifierIfPresent
-                )
-                _ = try await probe.send(to: AgentRoutes.systemPing) as String
-                return
-            } catch {
-                lastError = error
-                continue
+        if action == "register" {
+            // Poll for service availability. Each ping uses a fresh
+            // XPCClient so we don't reuse a connection that may have
+            // cached a "service does not exist" failure on first attempt.
+            let deadline = Date().addingTimeInterval(bootstrapTimeout)
+            var lastError: Error? = nil
+            while Date() < deadline {
+                try? await Task.sleep(nanoseconds: 250_000_000) // 250 ms
+                do {
+                    let probe = XPCClient.forMachService(
+                        named: kithAgentMachServiceName,
+                        withServerRequirement: .sameTeamIdentifierIfPresent
+                    )
+                    _ = try await probe.send(to: AgentRoutes.systemPing) as String
+                    return
+                } catch {
+                    lastError = error
+                    continue
+                }
             }
+            if let lastError {
+                throw lastError
+            }
+            throw KithAgentClientError.agentUnreachable(
+                underlying: NSError(domain: "kith.bootstrap", code: -1, userInfo: [NSLocalizedDescriptionKey: "agent did not register within \(bootstrapTimeout)s"])
+            )
         }
-        if let lastError {
-            throw lastError
-        }
-        // Defensive: deadline expired before we even got a single attempt in.
-        throw KithAgentClientError.agentUnreachable(
-            underlying: NSError(domain: "kith.bootstrap", code: -1, userInfo: [NSLocalizedDescriptionKey: "agent did not register within \(bootstrapTimeout)s"])
-        )
     }
 
     private static func classify(_ error: Error) -> Error {

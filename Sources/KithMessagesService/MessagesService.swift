@@ -18,10 +18,44 @@ public enum KithMessagesService {
 
     // MARK: - contacts.*
 
+    /// Ensure the calling agent process is authorized for Contacts.
+    ///
+    /// We DO NOT call `requestAccess(for: .contacts)` from the agent. The
+    /// agent runs as a background LaunchAgent and has no foreground UI
+    /// context to host a TCC prompt; macOS auto-denies the request and
+    /// records an implicit `.denied` in TCC, leaving the user permanently
+    /// stuck. The TCC prompt is fired from KithApp's `register` /
+    /// `request-contacts` actions instead — the .app's UI context is the
+    /// right side of the responsibility chain to host it.
+    ///
+    /// So here we just gate on status:
+    ///   - `.granted`           → continue
+    ///   - `.notDetermined`     → throw with a hint that points at the
+    ///                            CLI's auto-bootstrap path
+    ///   - `.denied` / `.restricted` → throw with a hint that points at
+    ///                                 System Settings.
+    private static func ensureContactsGranted(_ contacts: ContactsStore) throws {
+        switch contacts.authorizationStatus() {
+        case .granted:
+            return
+        case .notDetermined:
+            // CLI catches this and auto-fires `open -a Kith.app --args
+            // request-contacts`, which prompts in KithApp's UI context.
+            throw KithWireError.contactsNotDetermined(
+                "Contacts access not yet prompted; the kith CLI will auto-trigger the system prompt via Kith.app."
+            )
+        case .denied, .restricted:
+            throw KithWireError.permissionDenied(
+                "Contacts access denied. Enable Kith under System Settings → Privacy & Security → Contacts (run `kith doctor` for the full hint)."
+            )
+        }
+    }
+
     public static func contactsFind(
         contacts: ContactsStore,
         query: ContactsQuery
     ) throws -> [Contact] {
+        try ensureContactsGranted(contacts)
         do {
             return try contacts.find(query: query)
         } catch {
@@ -33,6 +67,7 @@ public enum KithMessagesService {
         contacts: ContactsStore,
         id: String
     ) throws -> Contact? {
+        try ensureContactsGranted(contacts)
         do {
             return try contacts.get(byID: id)
         } catch {
@@ -43,6 +78,7 @@ public enum KithMessagesService {
     public static func contactsListGroups(
         contacts: ContactsStore
     ) throws -> [ContactGroup] {
+        try ensureContactsGranted(contacts)
         do {
             return try contacts.listGroups()
         } catch {
@@ -55,6 +91,7 @@ public enum KithMessagesService {
         groupID: String,
         limit: Int
     ) throws -> [Contact] {
+        try ensureContactsGranted(contacts)
         do {
             return try contacts.members(ofGroupID: groupID, limit: limit)
         } catch {
@@ -66,6 +103,7 @@ public enum KithMessagesService {
         contacts: ContactsStore,
         name: String
     ) throws -> [ContactGroup] {
+        try ensureContactsGranted(contacts)
         do {
             return try contacts.groups(named: name)
         } catch {
@@ -87,6 +125,11 @@ public enum KithMessagesService {
         }
 
         if let with = q.with {
+            // --with may name a person — resolver hits ContactsStore. Force
+            // a TCC check so notDetermined surfaces the prompt.
+            if needsContactsResolution(with) {
+                try ensureContactsGranted(contacts)
+            }
             let resolver = Resolver(contacts: contacts, messages: messages, normalizer: normalizer, region: q.region)
             let target: ResolvedTarget
             do { target = try resolver.resolve(with) }
@@ -144,6 +187,11 @@ public enum KithMessagesService {
     ) throws -> MessagesHistoryResult {
         if q.limit < 1 || q.limit > 5000 {
             throw KithWireError.invalidInput("--limit must be in 1..5000")
+        }
+
+        // Same guard as messagesChats: --with name/cn-id needs Contacts.
+        if needsContactsResolution(q.with) {
+            try ensureContactsGranted(contacts)
         }
 
         let resolver = Resolver(contacts: contacts, messages: messages, normalizer: normalizer, region: q.region)
@@ -267,6 +315,16 @@ public enum KithMessagesService {
             set.insert("tel:\(normalized)")
         }
         return set
+    }
+
+    /// True if a `--with` value will hit ContactsStore during resolution.
+    /// `name` and `cnContactID` forms need Contacts; chat-id, chat-guid,
+    /// raw phone, and email forms don't.
+    public static func needsContactsResolution(_ with: String) -> Bool {
+        switch WithArgParser.parse(with) {
+        case .name, .cnContactID: return true
+        default:                  return false
+        }
     }
 
     public static func mergeIdentities(target: ResolvedTarget) -> Set<String> {

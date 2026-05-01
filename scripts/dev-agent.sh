@@ -42,10 +42,13 @@ build() {
     exit 1
   fi
   echo "==> codesign agent + cli with $DEV_IDENTITY"
+  # Unified identifier (see scripts/sign-and-notarize.sh): TCC attributes
+  # the agent's CN requests to com.supaku.kith — a LaunchServices-
+  # registered bundle — so "Kith" shows up in System Settings normally.
   codesign --force --options runtime --sign "$DEV_IDENTITY" \
-    --identifier com.supaku.kith       "$KITH_BIN"
+    --identifier com.supaku.kith "$KITH_BIN"
   codesign --force --options runtime --sign "$DEV_IDENTITY" \
-    --identifier com.supaku.kith.agent "$AGENT_BIN"
+    --identifier com.supaku.kith "$AGENT_BIN"
 }
 
 write_plist() {

@@ -107,12 +107,22 @@ codesign -dvvv "$CLI_BIN"
 # Embedded executables MUST be signed before the parent .app, because the
 # .app's seal computes hashes over its contents. Otherwise the parent's
 # signature breaks the moment we re-sign the children.
+#
+# Both the main executable (KithApp) AND the agent helper (KithAgent) use
+# `com.supaku.kith` as their codesign identifier — matching Kith.app's
+# CFBundleIdentifier. This makes TCC attribute the agent's CNContactStore
+# requests to "com.supaku.kith", which is a LaunchServices-registered
+# bundle. Result: "Kith" shows up in System Settings → Privacy & Security
+# → Contacts with a normal toggle, and `tccutil reset Contacts
+# com.supaku.kith` works as users expect. (`.sameTeamIdentifier` in
+# SecureXPC only checks Team ID, so the unified identifier doesn't break
+# the XPC connection.)
 echo "==> codesign embedded KithAgent"
 codesign \
   --options runtime \
   --force \
   --timestamp \
-  --identifier com.supaku.kith.agent \
+  --identifier com.supaku.kith \
   --sign "$IDENTITY" \
   "$APP_BUNDLE/Contents/MacOS/KithAgent"
 
@@ -121,7 +131,7 @@ codesign \
   --options runtime \
   --force \
   --timestamp \
-  --identifier com.supaku.kith.app \
+  --identifier com.supaku.kith \
   --sign "$IDENTITY" \
   "$APP_BUNDLE/Contents/MacOS/KithApp"
 
