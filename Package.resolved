@@ -1,5 +1,5 @@
 {
-  "originHash" : "34bee5ad7bd6f6de6e0fca59067a165eb6aa5889be2660eeb4eb9cabda9a54ca",
+  "originHash" : "3e0d490c4a14a836f54b42780c56aa929dd80dc34805ec36d29aa59c156a8a28",
   "pins" : [
     {
       "identity" : "phonenumberkit",
@@ -8,6 +8,15 @@
       "state" : {
         "revision" : "840ca3a89ced1a190e20ac93666ff3cdb376c973",
         "version" : "4.2.11"
+      }
+    },
+    {
+      "identity" : "securexpc",
+      "kind" : "remoteSourceControl",
+      "location" : "https://github.com/trilemma-dev/SecureXPC.git",
+      "state" : {
+        "revision" : "d6e439e2b805de8be9b584fff97cf2f6a839a656",
+        "version" : "0.8.0"
       }
     },
     {

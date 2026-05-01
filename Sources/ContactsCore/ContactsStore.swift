@@ -14,7 +14,7 @@ public enum ContactsError: Error, Sendable {
     case ambiguous(String, candidates: [Contact])
 }
 
-public struct ContactsQuery: Sendable {
+public struct ContactsQuery: Sendable, Codable {
     public var name: String?
     public var email: String?
     public var phone: String?
