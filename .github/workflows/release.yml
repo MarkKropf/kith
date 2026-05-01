@@ -91,14 +91,75 @@ jobs:
       - name: Package tarball
         id: package
         run: |
+          set -euo pipefail
           mkdir -p dist
+          STAGE="$(mktemp -d)"
+          mkdir -p "$STAGE/libexec"
+
+          # The signed binary lives in libexec/ so SwiftPM-generated resource
+          # bundles (PhoneNumberKit, SQLite.swift) sit next to it where
+          # Bundle.module expects to find them. A shell wrapper at the top
+          # level becomes the "kith" command that brew symlinks into bin/.
+          cp .build/release/kith "$STAGE/libexec/kith"
+          cp -R .build/release/PhoneNumberKit_PhoneNumberKit.bundle "$STAGE/libexec/"
+          cp -R .build/release/SQLite.swift_SQLite.bundle           "$STAGE/libexec/"
+
+          cat > "$STAGE/kith" <<'WRAPPER'
+          #!/bin/sh
+          # kith launcher — resolves its own (possibly-symlinked) location and
+          # execs the real binary out of libexec/. Required because Bundle.main
+          # in a CLI uses the path argv[0] points at, which under brew is the
+          # /opt/homebrew/bin/ symlink — not the staged path where the
+          # resource bundles live.
+          SOURCE="$0"
+          while [ -L "$SOURCE" ]; do
+            DIR="$(cd -P "$(dirname "$SOURCE")" && pwd)"
+            SOURCE="$(readlink "$SOURCE")"
+            case "$SOURCE" in
+              /*) ;;
+              *) SOURCE="$DIR/$SOURCE" ;;
+            esac
+          done
+          DIR="$(cd -P "$(dirname "$SOURCE")" && pwd)"
+          exec "$DIR/libexec/kith" "$@"
+          WRAPPER
+          chmod +x "$STAGE/kith"
+
           ARCHIVE="dist/kith-${{ steps.version.outputs.version }}-macos-arm64.tar.gz"
-          tar -C .build/release -czf "$ARCHIVE" kith
+          tar -C "$STAGE" -czf "$ARCHIVE" kith libexec
           SHA256="$(shasum -a 256 "$ARCHIVE" | awk '{print $1}')"
           echo "$SHA256  $(basename "$ARCHIVE")" > "$ARCHIVE.sha256"
           echo "archive=${ARCHIVE}" >> "$GITHUB_OUTPUT"
           echo "sha256=${SHA256}"   >> "$GITHUB_OUTPUT"
           ls -lh dist/
+
+      - name: Smoke test packaged tarball
+        # Extracts the artifact users will actually receive and exercises a
+        # phone-parse path so a missing PhoneNumberKit bundle would be caught
+        # here, before the release goes out.
+        run: |
+          set -euo pipefail
+          EXTRACT="$(mktemp -d)"
+          tar -C "$EXTRACT" -xzf "${{ steps.package.outputs.archive }}"
+
+          # Symlink the wrapper into a different prefix to mimic the brew layout
+          # (/opt/homebrew/bin/kith → staged_path/kith).
+          ln -s "$EXTRACT/kith" "$EXTRACT/kith-link"
+
+          echo "==> kith version"
+          "$EXTRACT/kith-link" version
+
+          echo "==> kith chats --participant '+14155551212' (forces PhoneNumberKit)"
+          # The command will fail (no chat.db on the runner) but the failure
+          # mode we're checking for is the resource-bundle fatal — anything
+          # else is fine.
+          OUTPUT="$("$EXTRACT/kith-link" chats --participant '+14155551212' 2>&1 || true)"
+          echo "$OUTPUT"
+          if echo "$OUTPUT" | grep -q "could not load resource bundle"; then
+            echo "::error::PhoneNumberKit resource bundle missing from packaged tarball"
+            exit 1
+          fi
+          echo "==> packaged tarball loads SwiftPM resource bundles correctly"
 
       - name: Create or update GitHub Release
         uses: softprops/action-gh-release@v2
