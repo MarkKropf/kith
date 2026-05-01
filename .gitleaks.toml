@@ -1,0 +1,31 @@
+# Gitleaks configuration for kith.
+# https://github.com/gitleaks/gitleaks
+
+title = "kith gitleaks config"
+
+[extend]
+# Extend the default gitleaks rules (covers 100+ secret types).
+useDefault = true
+
+[allowlist]
+description = "kith allowlist"
+
+paths = [
+  # Build artifacts (also gitignored, defensive).
+  '''\.build/''',
+
+  # SwiftPM lockfile — has dep SHAs, not secrets.
+  '''Package\.resolved''',
+
+  # Test fixtures — synthetic data sometimes resembles credentials.
+  '''Tests/.*Fixture.*''',
+
+  # Build-stamped commit SHA can match hex-string heuristics.
+  '''Sources/kith/Generated/BuildInfo\.swift''',
+
+  # Third-party license texts.
+  '''THIRD_PARTY_NOTICES\.md''',
+
+  # Internal planning docs include illustrative code/JSON samples.
+  '''\.claude/''',
+]

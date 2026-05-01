@@ -1,0 +1,7 @@
+# Gitleaks baseline — known historical findings vetted as false positives or
+# already remediated. Format: commit-hash:file:rule-id:line-number, or just
+# the fingerprint hash from gitleaks output.
+#
+# To regenerate after a history rewrite:
+#   gitleaks git --report-format json --report-path gitleaks-report.json
+#   # review and append fingerprints below
