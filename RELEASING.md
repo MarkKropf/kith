@@ -9,7 +9,12 @@ Releases are tag-driven. Pushing a tag matching `v*.*.*` triggers `.github/workf
 $EDITOR version.env
 $EDITOR Sources/kith/Resources/Info.plist
 
-# 2. Commit, tag, push.
+# 2. REHEARSE the release locally. Don't skip this — it's the only thing
+#    that catches packaging regressions (e.g. a missing SwiftPM resource
+#    bundle) before they ship.
+bash scripts/release-rehearsal.sh
+
+# 3. Commit, tag, push.
 git add version.env Sources/kith/Resources/Info.plist
 git commit -m "release: 0.1.1"
 git tag -a v0.1.1 -m "kith 0.1.1"
@@ -18,6 +23,18 @@ git push origin v0.1.1
 ```
 
 Watch the workflow at https://github.com/supaku/kith/actions/workflows/release.yml.
+
+## What the rehearsal does
+
+`scripts/release-rehearsal.sh` is a local equivalent of the CI package + smoke steps. It:
+
+1. `swift build -c release --arch arm64`
+2. Calls `scripts/package.sh` to assemble the libexec/wrapper tarball — same script CI runs.
+3. Extracts the tarball into a temp dir.
+4. Symlinks the wrapper from a different prefix (mimics how brew installs `/opt/homebrew/bin/kith` as a symlink into the cask's staged path).
+5. Runs `kith version` and `kith chats --participant '+14155551212'` through the symlink. The phone-parse path forces PhoneNumberKit to load its resource bundle — if a SwiftPM dep added a new bundle that didn't make it into `scripts/package.sh`'s `REQUIRED_BUNDLES` list, this fails loudly here rather than at user runtime.
+
+If the rehearsal exits 0, the package is shippable. Run it before every tag.
 
 ## Required secrets
 
