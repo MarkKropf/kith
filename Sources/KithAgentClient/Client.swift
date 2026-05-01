@@ -50,15 +50,25 @@ public final class KithAgentClient: @unchecked Sendable {
     }
 
     private static func classify(_ error: Error) -> Error {
-        // SecureXPC surfaces specific error types; for now treat the
-        // non-existent-mach-service flavor as agentUnreachable and let the
-        // rest fall through. We'll harden this once we see real failure
-        // shapes during integration testing.
+        // SecureXPC raises XPCError values; we substring-match because the
+        // public surface doesn't expose stable case discriminants we can
+        // pattern-match on here. The empirical failure modes we care about:
+        //   - `connectionInvalid` — the Mach service isn't registered or has
+        //     no listening process. Means the agent isn't running.
+        //   - `connectionInterrupted` — the agent listening process died
+        //     mid-request. Treat the same as unreachable for UX purposes.
+        //   - "code signing requirement" / "not accepted" — the agent
+        //     refused our identity. Surface a different hint so the user
+        //     knows to check signing rather than restart the agent.
         let message = String(describing: error).lowercased()
-        if message.contains("could not connect") || message.contains("does not exist") || message.contains("no such file") {
+        if message.contains("connectioninvalid")
+            || message.contains("connectioninterrupted")
+            || message.contains("could not connect")
+            || message.contains("does not exist")
+            || message.contains("no such file") {
             return KithAgentClientError.agentUnreachable(underlying: error)
         }
-        if message.contains("not accepted") || message.contains("requirement") {
+        if message.contains("not accepted") || message.contains("code signing requirement") {
             return KithAgentClientError.clientNotAccepted
         }
         return KithAgentClientError.agentReturnedError(underlying: error)
