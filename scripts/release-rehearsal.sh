@@ -1,27 +1,46 @@
 #!/usr/bin/env bash
 # Local end-to-end release rehearsal — run before pushing a tag.
 #
-# What it does:
-#   1. swift build -c release --arch arm64
-#   2. scripts/package.sh stage dist/staging
-#   3. (optional, gated by KITH_REHEARSE_DEV_SIGN=1) sign Kith.app + CLI
-#      with the local Developer ID identity. No notarization. Required for
-#      the agent path because SecureXPC's MachService binding rejects
-#      ad-hoc-signed binaries.
-#   4. (optional, gated by KITH_REHEARSE_SIGN=1) full sign + notarize
-#      rehearsal via scripts/sign-and-notarize.sh with KITH_SKIP_NOTARIZE=1.
-#   5. scripts/package.sh tarball dist/staging dist/kith-<v>-macos-arm64.tar.gz
-#   6. extract the tarball into a temp dir and smoke-test the wrapper +
-#      libexec layout (catches missing SwiftPM resource bundles).
-#   7. (optional, gated by KITH_REHEARSE_AGENT=1) install Kith.app to
-#      ~/Applications, register its LaunchAgent, run `kith doctor` against
-#      the live agent, and assert the JSON report says agent.reachable=true.
-#      Skips on a fresh install if Contacts/FDA aren't granted yet — the
-#      reachability bit is what matters here, not perms.
+# Three modes, picked by env var (cheapest first):
 #
-# The phone-parse smoke (step 6 chats --participant) catches missing SwiftPM
-# resource bundles, which is the failure mode that made it past v0.1.0.
-# Don't drop it.
+#   default                       fast: build, package, smoke. No signing,
+#                                 no notarize. Catches packaging bugs but
+#                                 NOT TCC / first-run / Gatekeeper bugs.
+#
+#   KITH_REHEARSE_DEV_SIGN=1      adds Developer ID signing in place. Lets
+#                                 us register the LaunchAgent (SecureXPC's
+#                                 MachService rejects ad-hoc-signed) but
+#                                 the .app is still spctl-rejected, so TCC
+#                                 prompts auto-deny.
+#
+#   KITH_REHEARSE_NOTARIZE=1      runs the FULL release pipeline: dev
+#                                 sign + scripts/sign-and-notarize.sh
+#                                 (which submits to Apple's notary +
+#                                 staples the .app). 5–15 min round trip.
+#                                 Sources .env.local for the secrets.
+#                                 After staple, asserts spctl reports
+#                                 "Notarized Developer ID". This is the
+#                                 only mode that reproduces production-
+#                                 install behavior — use it when you've
+#                                 touched TCC, the bundle layout, signing
+#                                 identifiers, or anything around the
+#                                 first-run UX. Implies KITH_REHEARSE_AGENT
+#                                 unless the caller turns it off
+#                                 explicitly.
+#
+#   KITH_REHEARSE_SIGN=1          legacy alias for "run sign-and-notarize
+#                                 with KITH_SKIP_NOTARIZE=1" — exercises
+#                                 the inside-out codesign flow without the
+#                                 network round-trip. Kept because the CI
+#                                 dry-run uses it.
+#
+#   KITH_REHEARSE_AGENT=1         install the staged Kith.app to
+#                                 ~/Applications, register its LaunchAgent,
+#                                 verify XPC round-trip via `kith doctor`.
+#                                 Independent of the signing modes.
+#
+# The phone-parse smoke ("kith chats --jsonl …") catches missing SwiftPM
+# resource bundles — the failure mode that made it past v0.1.0. Keep it.
 
 set -euo pipefail
 
@@ -65,6 +84,49 @@ fi
 if [[ "${KITH_REHEARSE_SIGN:-0}" == "1" ]]; then
   echo "==> rehearse full sign (KITH_SKIP_NOTARIZE=1, no network round-trip)"
   KITH_SKIP_NOTARIZE=1 bash scripts/sign-and-notarize.sh "$STAGE"
+fi
+
+if [[ "${KITH_REHEARSE_NOTARIZE:-0}" == "1" ]]; then
+  echo "==> KITH_REHEARSE_NOTARIZE=1 — full sign + notarize + staple"
+  if [[ ! -f "$REPO_ROOT/.env.local" ]]; then
+    echo "FAIL: $REPO_ROOT/.env.local missing — that's where the Apple notary" >&2
+    echo "      secrets live (APPLE_DEVELOPER_ID, APPLE_PASSWORD, APPLE_TEAM_ID," >&2
+    echo "      APPLE_DEVELOPER_ID_CERT_BASE64, APPLE_DEVELOPER_ID_CERT_PASSWORD)." >&2
+    exit 1
+  fi
+  # Source .env.local with auto-export so scripts/sign-and-notarize.sh's
+  # subprocess inherits the secrets. Keep the variables out of the parent
+  # shell's history by running this in a subshell-style block.
+  set -a
+  # shellcheck source=/dev/null
+  source "$REPO_ROOT/.env.local"
+  set +a
+  for var in APPLE_DEVELOPER_ID_CERT_BASE64 APPLE_DEVELOPER_ID_CERT_PASSWORD \
+             APPLE_DEVELOPER_ID APPLE_PASSWORD APPLE_TEAM_ID; do
+    if [[ -z "${!var:-}" ]]; then
+      echo "FAIL: $var not set after sourcing .env.local — check the file" >&2
+      exit 1
+    fi
+  done
+
+  echo "==> running sign-and-notarize.sh end-to-end (5–15 min for notarytool)"
+  bash scripts/sign-and-notarize.sh "$STAGE"
+
+  echo "==> assert spctl recognizes Kith.app as notarized"
+  spctl_out="$(spctl --assess --type execute --verbose "$STAGE/Kith.app" 2>&1)"
+  echo "$spctl_out"
+  if ! echo "$spctl_out" | grep -q "Notarized Developer ID"; then
+    echo "FAIL: post-staple Kith.app not seen as notarized by spctl. Above is the assess output." >&2
+    exit 1
+  fi
+  echo "    spctl: $(echo "$spctl_out" | head -1)"
+
+  # KITH_REHEARSE_NOTARIZE implies the agent path — the whole point of
+  # notarizing is to verify TCC prompts fire from a real notarized .app.
+  # Caller can set KITH_REHEARSE_AGENT=0 explicitly if they want to skip.
+  if [[ -z "${KITH_REHEARSE_AGENT+x}" ]]; then
+    KITH_REHEARSE_AGENT=1
+  fi
 fi
 
 echo "==> tarball"
@@ -157,11 +219,35 @@ if [[ "${KITH_REHEARSE_AGENT:-0}" == "1" ]]; then
     echo "WARN: agent's reported version doesn't match KITH_VERSION=${KITH_VERSION} (stale install?)" >&2
   fi
   echo "    agent reachable; XPC round-trip OK."
+
+  # Notarized .app should be able to display TCC prompts. We can't fully
+  # automate "the user clicks Allow," but we CAN verify that `kith find`
+  # returns either success (already granted) or contactsNotDetermined
+  # (auto-bootstrap fired the prompt) — what we DON'T want to see is
+  # PERMISSION_DENIED with the bare message, which means macOS auto-denied
+  # the prompt request (the v0.2.1 bug). Only run this assertion in
+  # NOTARIZE mode since dev-signed builds always auto-deny.
+  if [[ "${KITH_REHEARSE_NOTARIZE:-0}" == "1" ]]; then
+    echo "==> verify TCC prompt path is reachable on notarized .app"
+    echo "    (If a system prompt appears asking about Contacts, click Allow"
+    echo "    to verify the full first-run flow. Otherwise the rehearsal"
+    echo "    confirms the agent is at least reaching the TCC layer cleanly.)"
+    find_out="$(KITH_BOOTSTRAP_APP_PATH="$USER_APPS/Kith.app" "$EXTRACT/kith-link" find --name "kith-rehearsal-impossible-name-$$" --jsonl --limit 1 2>&1 || true)"
+    if echo "$find_out" | grep -q "Contacts access denied"; then
+      echo "FAIL: notarized .app got Contacts access auto-denied — TCC prompt path is broken." >&2
+      echo "      stderr was:" >&2
+      echo "$find_out" >&2
+      exit 1
+    fi
+    echo "    TCC prompt path OK (no auto-deny)."
+  fi
 else
   echo
   echo "skip: agent round-trip rehearsal (set KITH_REHEARSE_AGENT=1 to run; mutates your LaunchAgent registry)"
-  echo "      For the agent path to actually work you'll also need KITH_REHEARSE_DEV_SIGN=1"
+  echo "      For the agent path to actually work you'll need KITH_REHEARSE_DEV_SIGN=1"
   echo "      so Kith.app + CLI are signed with a Developer ID identity."
+  echo "      To verify TCC prompts (first-run UX), use KITH_REHEARSE_NOTARIZE=1 —"
+  echo "      slow (5–15 min), but the only mode that exercises Gatekeeper / TCC."
 fi
 
 echo
