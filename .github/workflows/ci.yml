@@ -19,6 +19,11 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
+      - name: Select Xcode 16 (Swift 6 toolchain)
+        uses: maxim-lobanov/setup-xcode@v1
+        with:
+          xcode-version: latest-stable
+
       - name: Resolve Swift toolchain
         run: |
           swift --version
