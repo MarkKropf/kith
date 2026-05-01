@@ -1,7 +1,7 @@
 import ArgumentParser
-import ContactsCore
 import Foundation
-import MessagesCore
+import KithAgentClient
+import KithAgentProtocol
 
 struct DoctorCommand: AsyncParsableCommand {
     static let configuration = CommandConfiguration(
@@ -33,6 +33,11 @@ struct DoctorCommand: AsyncParsableCommand {
             let fullDiskAccess: PermissionState
             let automationMessages: PermissionState
         }
+        struct AgentMeta: Encodable {
+            let reachable: Bool
+            let version: String?
+            let bootstrapAppPath: String
+        }
         struct MessagesDb: Encodable {
             let path: String
             let openable: Bool
@@ -51,6 +56,7 @@ struct DoctorCommand: AsyncParsableCommand {
 
         let kith: KithMeta
         let platform: PlatformMeta
+        let agent: AgentMeta
         let permissions: Permissions
         let messagesDb: MessagesDb
         let contactsStore: ContactsStoreMeta
@@ -60,59 +66,52 @@ struct DoctorCommand: AsyncParsableCommand {
 
     func run() async throws {
         common.applyStyle()
-        let normalizer = KithPhoneNumberNormalizer()
-        let store = CNBackedContactsStore(normalizer: normalizer)
 
-        // Contacts permission
-        let contactsPerm: PermissionState
-        var contactsOpenable = false
-        var totalContacts = 0
-        switch store.authorizationStatus() {
-        case .granted:
-            contactsPerm = PermissionState(status: "granted", hint: nil)
-            contactsOpenable = true
-            totalContacts = (try? store.totalContacts) ?? 0
-        case .denied:
-            contactsPerm = PermissionState(
-                status: "denied",
-                hint: "Grant Contacts access to your terminal in System Settings → Privacy & Security → Contacts; the binary inherits its parent process's TCC grant."
-            )
-        case .restricted:
-            contactsPerm = PermissionState(status: "restricted", hint: "Contacts access is restricted by policy on this device.")
-        case .notDetermined:
-            contactsPerm = PermissionState(status: "not-determined", hint: "Run `kith find` once to trigger the macOS permission prompt.")
+        // The agent owns the Contacts grant + the FDA grant for chat.db, so
+        // we ask it for its own perspective on permissions/openability and
+        // augment with CLI-side metadata.
+        let client = KithAgentClient()
+        let health: AgentHealthReport
+        do {
+            health = try await client.health()
+        } catch {
+            // Either the agent isn't running and bootstrap failed, or the
+            // agent threw. Print a degraded report and exit with the same
+            // code paths as before.
+            renderUnreachable(reason: String(describing: error))
+            throw ExitCode(KithExitCode.generic.rawValue)
         }
 
-        // Full Disk Access — try to open chat.db read-only.
-        let dbPath = MessageStore.kithDefaultPath
-        var dbOpenable = false
-        var schemaFlags: [String: Bool] = [:]
-        var fdaPerm: PermissionState
-        if !FileManager.default.fileExists(atPath: dbPath) {
+        let contactsPerm: PermissionState
+        switch health.contactsAuthStatus {
+        case "granted":
+            contactsPerm = PermissionState(status: "granted", hint: nil)
+        case "denied":
+            contactsPerm = PermissionState(
+                status: "denied",
+                hint: "Grant Contacts access to Kith.app in System Settings → Privacy & Security → Contacts."
+            )
+        case "restricted":
+            contactsPerm = PermissionState(status: "restricted", hint: "Contacts access is restricted by policy on this device.")
+        case "not-determined":
+            contactsPerm = PermissionState(status: "not-determined", hint: "Run `kith find` once to trigger the macOS permission prompt for Kith.app.")
+        default:
+            contactsPerm = PermissionState(status: health.contactsAuthStatus, hint: nil)
+        }
+
+        let fdaPerm: PermissionState
+        if !FileManager.default.fileExists(atPath: health.messagesDbPath) {
             fdaPerm = PermissionState(
                 status: "restricted",
-                hint: "chat.db not found at \(dbPath). Open Messages.app and sign in once to create it."
+                hint: "chat.db not found at \(health.messagesDbPath). Open Messages.app and sign in once to create it."
             )
+        } else if health.messagesDbOpenable {
+            fdaPerm = PermissionState(status: "granted", hint: nil)
         } else {
-            do {
-                let mstore = try MessageStore(path: dbPath)
-                dbOpenable = true
-                let flags = mstore.kithSchemaFlags
-                schemaFlags = [
-                    "hasAttributedBody": flags.hasAttributedBody,
-                    "hasReactionColumns": flags.hasReactionColumns,
-                    "hasThreadOriginatorGUIDColumn": flags.hasThreadOriginatorGUIDColumn,
-                    "hasDestinationCallerID": flags.hasDestinationCallerID,
-                ]
-                fdaPerm = PermissionState(status: "granted", hint: nil)
-            } catch {
-                let msg = String(describing: error).lowercased()
-                let isAuth = msg.contains("authorization denied") || msg.contains("unable to open") || msg.contains("out of memory (14)")
-                fdaPerm = PermissionState(
-                    status: isAuth ? "denied" : "denied",
-                    hint: "FDA grants are per-binary AND inherited by child processes. Add your TERMINAL (Terminal.app, iTerm, ghostty, etc.) — not the kith binary itself — to System Settings → Privacy & Security → Full Disk Access. Restart the terminal afterward. If kith is being launched by an agent harness, that harness's process is the one needing FDA."
-                )
-            }
+            fdaPerm = PermissionState(
+                status: "denied",
+                hint: "Add Kith.app to System Settings → Privacy & Security → Full Disk Access. The agent inside Kith.app reads ~/Library/Messages/chat.db on your behalf; the kith CLI itself never opens chat.db."
+            )
         }
 
         let automationPerm = PermissionState(status: "n/a-in-v1", hint: nil)
@@ -120,9 +119,10 @@ struct DoctorCommand: AsyncParsableCommand {
         let report = DoctorReport(
             kith: .init(version: BuildInfo.version, commit: BuildInfo.commit),
             platform: .init(macOS: ProcessInfo.processInfo.operatingSystemVersionString, binaryArch: currentArch()),
+            agent: .init(reachable: true, version: health.agentVersion, bootstrapAppPath: KithAgentClient.bootstrapAppPath),
             permissions: .init(contacts: contactsPerm, fullDiskAccess: fdaPerm, automationMessages: automationPerm),
-            messagesDb: .init(path: dbPath, openable: dbOpenable, schemaFlags: schemaFlags),
-            contactsStore: .init(openable: contactsOpenable, totalContacts: totalContacts),
+            messagesDb: .init(path: health.messagesDbPath, openable: health.messagesDbOpenable, schemaFlags: health.schemaFlags),
+            contactsStore: .init(openable: contactsPerm.status == "granted", totalContacts: health.totalContacts),
             color: .init(useColor: AnsiStyle.auto.useColor, source: AnsiStyle.auto.source.rawValue),
             ok: contactsPerm.status == "granted" && fdaPerm.status == "granted"
         )
@@ -138,6 +138,32 @@ struct DoctorCommand: AsyncParsableCommand {
         }
     }
 
+    private func renderUnreachable(reason: String) {
+        if json {
+            struct Degraded: Encodable {
+                let kith: DoctorReport.KithMeta
+                let agent: DoctorReport.AgentMeta
+                let error: String
+                let ok: Bool
+            }
+            let payload = Degraded(
+                kith: .init(version: BuildInfo.version, commit: BuildInfo.commit),
+                agent: .init(reachable: false, version: nil, bootstrapAppPath: KithAgentClient.bootstrapAppPath),
+                error: reason,
+                ok: false
+            )
+            if let data = try? KithJSON.encoder(pretty: true).encode(payload) {
+                print(String(decoding: data, as: UTF8.self))
+            }
+        } else {
+            let style = AnsiStyle.auto
+            print("\(style.bold("kith")) \(BuildInfo.version) \(style.dim("(commit \(BuildInfo.commit))"))")
+            print("\(style.boldRed("[!!]")) kith-agent unreachable: \(reason)")
+            print("  \(style.yellow("hint:")) Install Kith.app via `brew install --cask kith`, then launch it once. Bootstrap path: \(KithAgentClient.bootstrapAppPath)")
+            print(style.boldRed("FAIL"))
+        }
+    }
+
     private func renderHuman(_ r: DoctorReport) {
         let style = AnsiStyle.auto
         func bullet(_ ok: Bool) -> String {
@@ -145,6 +171,9 @@ struct DoctorCommand: AsyncParsableCommand {
         }
         print("\(style.bold("kith")) \(r.kith.version) \(style.dim("(commit \(r.kith.commit))"))")
         print("\(style.dim("platform:")) \(r.platform.macOS) \(style.dim("(\(r.platform.binaryArch))"))")
+        if let v = r.agent.version {
+            print("\(bullet(r.agent.reachable)) \(style.bold("kith-agent:")) reachable (\(v))")
+        }
         print("\(bullet(r.permissions.contacts.status == "granted")) \(style.bold("contacts:")) \(r.permissions.contacts.status)")
         if let hint = r.permissions.contacts.hint { print("  \(style.yellow("hint:")) \(hint)") }
         print("\(bullet(r.permissions.fullDiskAccess.status == "granted")) \(style.bold("full disk access:")) \(r.permissions.fullDiskAccess.status)")

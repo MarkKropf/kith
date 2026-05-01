@@ -1,4 +1,5 @@
 import Foundation
+import KithAgentProtocol
 import MessagesCore
 import Testing
 @testable import kith

@@ -1,5 +1,6 @@
 import ContactsCore
 import Foundation
+import KithAgentProtocol
 import MessagesCore
 
 enum HumanRenderer {

@@ -1,6 +1,7 @@
 import ArgumentParser
 import ContactsCore
 import Foundation
+import KithAgentClient
 
 struct GetCommand: AsyncParsableCommand {
     static let configuration = CommandConfiguration(
@@ -27,19 +28,26 @@ struct GetCommand: AsyncParsableCommand {
 
     func run() async throws {
         common.applyStyle()
-        let store: CNBackedContactsStore
-        do { (store, _) = try RunHelpers.makeContactsStore() }
-        catch let err as KithCommandError { throw ExitCode(err.emit(machine: json)) }
+        let client = RunHelpers.makeClient(machine: json)
 
         let isUUID = Self.uuidRegex.firstMatch(
             in: target, options: [], range: NSRange(location: 0, length: target.utf16.count)
         ) != nil
 
-        var resolved: Contact?
+        let resolved: Contact?
         if isUUID {
-            resolved = try? store.get(byID: target)
+            do {
+                resolved = try await client.get(id: target)
+            } catch {
+                throw ExitCode(RunHelpers.emitClientError(error, machine: json))
+            }
         } else {
-            let matches = (try? store.find(query: ContactsQuery(exactFullName: target, limit: 50))) ?? []
+            let matches: [Contact]
+            do {
+                matches = try await client.find(query: ContactsQuery(exactFullName: target, limit: 50))
+            } catch {
+                throw ExitCode(RunHelpers.emitClientError(error, machine: json))
+            }
             if matches.isEmpty {
                 _ = ErrorReporter.emit(.notFound, message: "no contact matches \"\(target)\"", machine: json)
                 throw ExitCode(KithExitCode.notFound.rawValue)

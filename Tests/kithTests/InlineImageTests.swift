@@ -1,5 +1,5 @@
 import Foundation
-import MessagesCore
+import KithAgentProtocol
 import Testing
 @testable import kith
 
@@ -54,18 +54,18 @@ struct InlineImageTests {
 
     @Test("canRender filters non-image attachments")
     func canRender() {
-        let png = AttachmentMeta(filename: "/x/a.png", transferName: "a.png", uti: "public.png", mimeType: "image/png", totalBytes: 1, isSticker: false, originalPath: "/x/a.png", missing: false)
-        let mov = AttachmentMeta(filename: "/x/clip.mov", transferName: "clip.mov", uti: "com.apple.quicktime-movie", mimeType: "video/quicktime", totalBytes: 1, isSticker: false, originalPath: "/x/clip.mov", missing: false)
-        let missing = AttachmentMeta(filename: "/x/y.png", transferName: "y.png", uti: "public.png", mimeType: "image/png", totalBytes: 1, isSticker: false, originalPath: "/x/y.png", missing: true)
-        #expect(InlineImageRenderer.canRender(meta: png) == true)
-        #expect(InlineImageRenderer.canRender(meta: mov) == false)
-        #expect(InlineImageRenderer.canRender(meta: missing) == false)
+        let png = KithAttachment(filename: "/x/a.png", transferName: "a.png", uti: "public.png", mimeType: "image/png", totalBytes: 1, isSticker: false, originalPath: "/x/a.png", missing: false)
+        let mov = KithAttachment(filename: "/x/clip.mov", transferName: "clip.mov", uti: "com.apple.quicktime-movie", mimeType: "video/quicktime", totalBytes: 1, isSticker: false, originalPath: "/x/clip.mov", missing: false)
+        let missing = KithAttachment(filename: "/x/y.png", transferName: "y.png", uti: "public.png", mimeType: "image/png", totalBytes: 1, isSticker: false, originalPath: "/x/y.png", missing: true)
+        #expect(InlineImageRenderer.canRender(attachment: png) == true)
+        #expect(InlineImageRenderer.canRender(attachment: mov) == false)
+        #expect(InlineImageRenderer.canRender(attachment: missing) == false)
     }
 
     @Test("canRender accepts known image extensions even when MIME is empty")
     func extensionFallback() {
-        let heic = AttachmentMeta(filename: "/x/IMG.HEIC", transferName: "IMG.HEIC", uti: "", mimeType: "", totalBytes: 1, isSticker: false, originalPath: "/x/IMG.HEIC", missing: false)
-        #expect(InlineImageRenderer.canRender(meta: heic) == true)
+        let heic = KithAttachment(filename: "/x/IMG.HEIC", transferName: "IMG.HEIC", uti: "", mimeType: "", totalBytes: 1, isSticker: false, originalPath: "/x/IMG.HEIC", missing: false)
+        #expect(InlineImageRenderer.canRender(attachment: heic) == true)
     }
 
     @Test("iTerm2 escape: starts with OSC 1337, base64 inline, ends BEL")

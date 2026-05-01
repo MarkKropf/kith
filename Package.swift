@@ -13,6 +13,7 @@ let package = Package(
         .library(name: "ResolveCore",        targets: ["ResolveCore"]),
         .library(name: "KithAgentProtocol",  targets: ["KithAgentProtocol"]),
         .library(name: "KithAgentClient",    targets: ["KithAgentClient"]),
+        .library(name: "KithMessagesService", targets: ["KithMessagesService"]),
     ],
     dependencies: [
         .package(url: "https://github.com/apple/swift-argument-parser.git", from: "1.5.0"),
@@ -35,13 +36,32 @@ let package = Package(
             dependencies: ["ContactsCore", "MessagesCore"]
         ),
         // Wire-protocol types + XPCRoute definitions shared between the
-        // agent (server) and the CLI (client). No platform deps; just
-        // SecureXPC for the route helpers.
+        // agent (server) and the CLI (client). Depends on MessagesCore so
+        // wire-shape construction helpers (`cleanMessageText`,
+        // `makeKithMessage`) can take MessagesCore values directly — both
+        // sides already import MessagesCore for their own reasons, so no new
+        // transitive deps are introduced.
         .target(
             name: "KithAgentProtocol",
             dependencies: [
                 "ContactsCore",
+                "MessagesCore",
                 .product(name: "SecureXPC", package: "SecureXPC"),
+            ]
+        ),
+        // Pure in-process implementation of the messages.* + contacts.*
+        // pipelines (resolver, canonical-1:1 filter, message stream,
+        // attachments, text cleanup). Both the agent (production XPC) and
+        // the CLI (test/dev local mode via KITH_DB_PATH) depend on it so
+        // there's exactly one source of truth for "how kith resolves and
+        // streams messages."
+        .target(
+            name: "KithMessagesService",
+            dependencies: [
+                "ContactsCore",
+                "MessagesCore",
+                "ResolveCore",
+                "KithAgentProtocol",
             ]
         ),
         // Long-lived daemon (LaunchAgent in v0.2.0 production layout).
@@ -51,6 +71,7 @@ let package = Package(
             name: "KithAgent",
             dependencies: [
                 "KithAgentProtocol",
+                "KithMessagesService",
                 "ContactsCore",
                 "MessagesCore",
                 "ResolveCore",
@@ -73,6 +94,8 @@ let package = Package(
                 "MessagesCore",
                 "ResolveCore",
                 "KithAgentClient",
+                "KithAgentProtocol",
+                "KithMessagesService",
                 .product(name: "ArgumentParser", package: "swift-argument-parser"),
             ],
             exclude: ["Resources/Info.plist"],

@@ -1,6 +1,7 @@
 import ArgumentParser
 import ContactsCore
 import Foundation
+import KithAgentClient
 
 struct GroupsCommand: AsyncParsableCommand {
     static let configuration = CommandConfiguration(
@@ -18,10 +19,13 @@ struct GroupsCommand: AsyncParsableCommand {
 
         func run() async throws {
             common.applyStyle()
-            let store: CNBackedContactsStore
-            do { (store, _) = try RunHelpers.makeContactsStore() }
-            catch let err as KithCommandError { throw ExitCode(err.emit(machine: jsonl)) }
-            let groups = try store.listGroups()
+            let client = RunHelpers.makeClient(machine: jsonl)
+            let groups: [ContactGroup]
+            do {
+                groups = try await client.listGroups()
+            } catch {
+                throw ExitCode(RunHelpers.emitClientError(error, machine: jsonl))
+            }
             if jsonl {
                 try JSONLEmitter.emit(groups)
             } else {
@@ -51,9 +55,7 @@ struct GroupsCommand: AsyncParsableCommand {
 
         func run() async throws {
             common.applyStyle()
-            let store: CNBackedContactsStore
-            do { (store, _) = try RunHelpers.makeContactsStore() }
-            catch let err as KithCommandError { throw ExitCode(err.emit(machine: jsonl)) }
+            let client = RunHelpers.makeClient(machine: jsonl)
 
             let isUUID = Self.uuidRegex.firstMatch(
                 in: target, options: [], range: NSRange(location: 0, length: target.utf16.count)
@@ -63,7 +65,12 @@ struct GroupsCommand: AsyncParsableCommand {
             if isUUID {
                 groupID = target
             } else {
-                let groups = try store.groups(named: target)
+                let groups: [ContactGroup]
+                do {
+                    groups = try await client.groupsByName(target)
+                } catch {
+                    throw ExitCode(RunHelpers.emitClientError(error, machine: jsonl))
+                }
                 if groups.isEmpty {
                     _ = ErrorReporter.emit(.notFound, message: "no group named \"\(target)\"", machine: jsonl)
                     throw ExitCode(KithExitCode.notFound.rawValue)
@@ -75,7 +82,12 @@ struct GroupsCommand: AsyncParsableCommand {
                 groupID = groups[0].id
             }
 
-            let members = try store.members(ofGroupID: groupID, limit: limit)
+            let members: [Contact]
+            do {
+                members = try await client.groupMembers(groupID: groupID, limit: limit)
+            } catch {
+                throw ExitCode(RunHelpers.emitClientError(error, machine: jsonl))
+            }
             if jsonl {
                 try JSONLEmitter.emit(members)
             } else {

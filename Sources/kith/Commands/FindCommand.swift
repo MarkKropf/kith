@@ -45,60 +45,16 @@ struct FindCommand: AsyncParsableCommand {
             _ = ErrorReporter.emit(.invalidInput, message: "--limit must be in 1..500", machine: jsonl)
             throw ExitCode(KithExitCode.invalidInput.rawValue)
         }
-        // v0.2.0: route Contacts access through the agent. The CLI itself
-        // never asks TCC for anything — Kith.app holds the grant and the
-        // agent is the responsible process.
-        let client: KithAgentClient
-        do {
-            client = try KithAgentClient()
-        } catch {
-            _ = ErrorReporter.emit(
-                .generic,
-                message: "could not construct kith-agent client: \(error)",
-                hint: "Bug: file an issue with the full error.",
-                machine: jsonl
-            )
-            throw ExitCode(KithExitCode.generic.rawValue)
-        }
+        let client = RunHelpers.makeClient(machine: jsonl)
         let query = ContactsQuery(
-            name: name,
-            email: email,
-            phone: phone,
-            organization: org,
-            region: region,
-            limit: limit
+            name: name, email: email, phone: phone, organization: org,
+            region: region, limit: limit
         )
         let results: [Contact]
         do {
             results = try await client.find(query: query)
-        } catch let err as KithAgentClientError {
-            switch err {
-            case .agentUnreachable:
-                _ = ErrorReporter.emit(
-                    .generic,
-                    message: "kith-agent isn't running.",
-                    hint: "In v0.2.0 dev: `bash scripts/dev-agent.sh load && bash scripts/dev-agent.sh kickstart`. In v0.2.0 production: launch /Applications/Kith.app once to register the agent.",
-                    machine: jsonl
-                )
-                throw ExitCode(KithExitCode.generic.rawValue)
-            case .clientNotAccepted:
-                _ = ErrorReporter.emit(
-                    .generic,
-                    message: "kith-agent rejected this client (code-signature mismatch).",
-                    hint: "Make sure the kith CLI and kith-agent are signed with the same Apple Team ID.",
-                    machine: jsonl
-                )
-                throw ExitCode(KithExitCode.generic.rawValue)
-            case .agentReturnedError(let underlying):
-                if String(describing: underlying).contains("permissionDenied") {
-                    throw ExitCode(KithCommandError.permissionDenied("Contacts access denied. The Kith app needs Contacts permission — see `kith doctor`.").emit(machine: jsonl))
-                }
-                _ = ErrorReporter.emit(.generic, message: String(describing: underlying), machine: jsonl)
-                throw ExitCode(KithExitCode.generic.rawValue)
-            }
         } catch {
-            _ = ErrorReporter.emit(.generic, message: String(describing: error), machine: jsonl)
-            throw ExitCode(KithExitCode.generic.rawValue)
+            throw ExitCode(RunHelpers.emitClientError(error, machine: jsonl))
         }
         let projected = projectFields(results)
         if jsonl {
@@ -114,9 +70,6 @@ struct FindCommand: AsyncParsableCommand {
     private func projectFields(_ contacts: [Contact]) -> [Contact] {
         guard let fields = fields else { return contacts }
         let want = Set(fields.split(separator: ",").map { String($0).trimmingCharacters(in: .whitespaces) })
-        // For v1 simplicity: return same Contact but blank out unselected
-        // multi-value arrays. Required core fields (id, fullName) always
-        // present.
         return contacts.map { c in
             Contact(
                 id: c.id,

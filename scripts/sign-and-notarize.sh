@@ -1,29 +1,44 @@
 #!/usr/bin/env bash
-# Sign + notarize a kith release binary.
+# Sign + notarize a kith release staging directory.
 #
 # Designed to run in CI on a macOS runner with no preexisting keychain. Imports
 # the Developer ID Application cert into a fresh ephemeral keychain, codesigns
-# the binary with hardened runtime, then notarizes via `xcrun notarytool`.
+# the CLI + Kith.app (inside-out), and notarizes both via `xcrun notarytool`.
 #
 # Required env (matches the org-level secrets stored in supaku):
 #   APPLE_DEVELOPER_ID_CERT_BASE64    base64-encoded .p12 of the Developer ID
 #                                     Application certificate.
 #   APPLE_DEVELOPER_ID_CERT_PASSWORD  password protecting the .p12.
 #   APPLE_DEVELOPER_ID                Apple ID email (used by notarytool).
-#   APPLE_PASSWORD                    app-specific password (NOT the Apple ID
-#                                     account password).
+#   APPLE_PASSWORD                    app-specific password.
 #   APPLE_TEAM_ID                     10-char Apple team identifier.
 #
-# Usage: scripts/sign-and-notarize.sh [path/to/binary]
-#   default binary path: .build/release/kith
+# Usage:
+#   scripts/sign-and-notarize.sh [<staging-dir>]    # default: dist/staging
+#
+# Optional env to skip the network round-trip during local rehearsal:
+#   KITH_SKIP_NOTARIZE=1   sign only — don't submit to notarytool / staple.
 
 set -euo pipefail
 
-BIN="${1:-.build/release/kith}"
+REPO_ROOT="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd)"
+STAGE="${1:-$REPO_ROOT/dist/staging}"
 
-if [[ ! -x "$BIN" ]]; then
-  echo "error: binary not found or not executable: $BIN" >&2
-  echo "       run 'swift build -c release --arch arm64' first" >&2
+if [[ ! -d "$STAGE" ]]; then
+  echo "error: staging directory not found: $STAGE" >&2
+  echo "       run: scripts/package.sh stage [<dir>]" >&2
+  exit 1
+fi
+
+CLI_BIN="$STAGE/libexec/kith"
+APP_BUNDLE="$STAGE/Kith.app"
+
+if [[ ! -x "$CLI_BIN" ]]; then
+  echo "error: $CLI_BIN missing or not executable" >&2
+  exit 1
+fi
+if [[ ! -d "$APP_BUNDLE" ]]; then
+  echo "error: $APP_BUNDLE not present" >&2
   exit 1
 fi
 
@@ -39,11 +54,12 @@ WORK_DIR="${RUNNER_TEMP:-$(mktemp -d)}"
 KEYCHAIN_PATH="$WORK_DIR/kith-build.keychain-db"
 KEYCHAIN_PASS="$(uuidgen)"
 CERT_PATH="$WORK_DIR/kith-cert.p12"
-ZIP_PATH="$WORK_DIR/kith-notarize.zip"
+CLI_ZIP="$WORK_DIR/kith-cli-notarize.zip"
+APP_ZIP="$WORK_DIR/kith-app-notarize.zip"
 
 cleanup() {
   security delete-keychain "$KEYCHAIN_PATH" 2>/dev/null || true
-  rm -f "$CERT_PATH" "$ZIP_PATH" 2>/dev/null || true
+  rm -f "$CERT_PATH" "$CLI_ZIP" "$APP_ZIP" 2>/dev/null || true
 }
 trap cleanup EXIT
 
@@ -76,39 +92,96 @@ if [[ -z "$IDENTITY" ]]; then
   exit 1
 fi
 
-echo "==> codesign $BIN with $IDENTITY"
+# ---- Sign the CLI binary ------------------------------------------------------
+echo "==> codesign $CLI_BIN with $IDENTITY"
 codesign \
   --options runtime \
   --force \
   --timestamp \
   --identifier com.supaku.kith \
   --sign "$IDENTITY" \
-  "$BIN"
+  "$CLI_BIN"
+codesign -dvvv "$CLI_BIN"
 
-codesign -dvvv "$BIN"
+# ---- Sign Kith.app inside-out -------------------------------------------------
+# Embedded executables MUST be signed before the parent .app, because the
+# .app's seal computes hashes over its contents. Otherwise the parent's
+# signature breaks the moment we re-sign the children.
+echo "==> codesign embedded KithAgent"
+codesign \
+  --options runtime \
+  --force \
+  --timestamp \
+  --identifier com.supaku.kith.agent \
+  --sign "$IDENTITY" \
+  "$APP_BUNDLE/Contents/MacOS/KithAgent"
 
-echo "==> zip for notarytool (notarytool only accepts .zip / .pkg / .dmg)"
-ditto -c -k --keepParent "$BIN" "$ZIP_PATH"
+echo "==> codesign embedded KithApp"
+codesign \
+  --options runtime \
+  --force \
+  --timestamp \
+  --identifier com.supaku.kith.app \
+  --sign "$IDENTITY" \
+  "$APP_BUNDLE/Contents/MacOS/KithApp"
 
-echo "==> notarytool submit (--wait blocks until accepted or timeout)"
-xcrun notarytool submit "$ZIP_PATH" \
+# SwiftPM resource bundles in Contents/Resources/ are sealed into the .app's
+# resource-hash chain by the parent codesign — they're plain data
+# directories, not nested code bundles, so we don't sign them individually.
+
+echo "==> codesign Kith.app (hardened runtime, bundle identifier com.supaku.kith)"
+codesign \
+  --options runtime \
+  --force \
+  --timestamp \
+  --identifier com.supaku.kith \
+  --sign "$IDENTITY" \
+  "$APP_BUNDLE"
+codesign -dvvv "$APP_BUNDLE"
+
+if [[ "${KITH_SKIP_NOTARIZE:-0}" == "1" ]]; then
+  echo "==> KITH_SKIP_NOTARIZE=1 — skipping notarytool / stapler"
+  exit 0
+fi
+
+# ---- Notarize the .app --------------------------------------------------------
+echo "==> zip Kith.app for notarytool"
+ditto -c -k --keepParent "$APP_BUNDLE" "$APP_ZIP"
+
+echo "==> notarytool submit Kith.app (--wait blocks until accepted or timeout)"
+xcrun notarytool submit "$APP_ZIP" \
   --apple-id "$APPLE_DEVELOPER_ID" \
   --team-id  "$APPLE_TEAM_ID" \
   --password "$APPLE_PASSWORD" \
   --wait \
   --timeout 20m
 
-# Stapling a bare CLI binary is not supported by `stapler staple`; only
-# .app/.dmg/.pkg containers can be stapled. For a bare binary, Gatekeeper
-# fetches the notarization ticket from Apple's CDN on first execution.
-echo "==> attempt stapler (expected to fail on bare CLI; fine to skip)"
-xcrun stapler staple "$BIN" 2>&1 \
+echo "==> stapler staple Kith.app (works on .app bundles, unlike bare CLI)"
+xcrun stapler staple "$APP_BUNDLE"
+xcrun stapler validate "$APP_BUNDLE"
+
+# ---- Notarize the bare CLI binary --------------------------------------------
+# Bare-binary stapling isn't supported (`stapler staple` rejects Mach-O
+# files); for an unzipped CLI, Gatekeeper does an online ticket lookup the
+# first time the binary is executed. We still notarize so that ticket is
+# registered with Apple.
+echo "==> zip kith CLI for notarytool"
+ditto -c -k --keepParent "$CLI_BIN" "$CLI_ZIP"
+
+echo "==> notarytool submit kith CLI"
+xcrun notarytool submit "$CLI_ZIP" \
+  --apple-id "$APPLE_DEVELOPER_ID" \
+  --team-id  "$APPLE_TEAM_ID" \
+  --password "$APPLE_PASSWORD" \
+  --wait \
+  --timeout 20m
+
+echo "==> attempt stapler on bare CLI (expected to fail; fine to skip)"
+xcrun stapler staple "$CLI_BIN" 2>&1 \
   || echo "note: bare-binary staple is expected to fail; Gatekeeper does an online ticket lookup on first run."
 
-echo "==> final codesign verify"
-codesign -dvvv "$BIN"
-echo "==> spctl assess (informational)"
-spctl -a -vvv -t install "$BIN" 2>&1 \
-  || echo "note: spctl may reject bare binaries; what matters is online ticket fetch at first run."
+echo "==> final spctl assess"
+spctl --assess --type execute --verbose "$APP_BUNDLE" 2>&1 \
+  || echo "note: spctl on Kith.app should succeed post-notarize/staple; investigate if this fails."
 
 echo "==> done."

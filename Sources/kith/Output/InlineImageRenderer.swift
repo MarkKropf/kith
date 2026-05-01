@@ -1,5 +1,5 @@
 import Foundation
-import MessagesCore
+import KithAgentProtocol
 
 /// Inline image rendering for `kith history --inline`.
 ///
@@ -69,15 +69,15 @@ enum InlineImageRenderer {
 
     /// Whether the attachment is a still image that any of our supported
     /// protocols can render (after optional sips conversion).
-    static func canRender(meta: AttachmentMeta) -> Bool {
-        if meta.missing { return false }
-        let mime = meta.mimeType.lowercased()
+    static func canRender(attachment a: KithAttachment) -> Bool {
+        if a.missing { return false }
+        let mime = a.mimeType.lowercased()
         let imageMimes: Set<String> = [
             "image/jpeg", "image/jpg", "image/png", "image/gif",
             "image/heic", "image/heif", "image/webp",
         ]
         if imageMimes.contains(mime) { return true }
-        let name = (meta.transferName.isEmpty ? meta.filename : meta.transferName).lowercased()
+        let name = (a.transferName.isEmpty ? a.filename : a.transferName).lowercased()
         return [".jpg", ".jpeg", ".png", ".gif", ".heic", ".heif", ".webp"]
             .contains { name.hasSuffix($0) }
     }
@@ -85,22 +85,22 @@ enum InlineImageRenderer {
     /// Build the escape sequence(s) that draw the image; nil when the
     /// attachment cannot be rendered (file missing, unsupported MIME,
     /// conversion failed, terminal protocol unsupported).
-    static func render(meta: AttachmentMeta, protocol p: InlineProtocol) -> String? {
-        if !canRender(meta: meta) {
-            debugLog("skip \(meta.transferName.isEmpty ? meta.filename : meta.transferName): not a renderable image (mime=\(meta.mimeType), missing=\(meta.missing))")
+    static func render(attachment a: KithAttachment, protocol p: InlineProtocol) -> String? {
+        if !canRender(attachment: a) {
+            debugLog("skip \(a.transferName.isEmpty ? a.filename : a.transferName): not a renderable image (mime=\(a.mimeType), missing=\(a.missing))")
             return nil
         }
         if p == .unsupported {
-            debugLog("skip \(meta.transferName): terminal protocol unsupported")
+            debugLog("skip \(a.transferName): terminal protocol unsupported")
             return nil
         }
-        let path = meta.originalPath
+        let path = a.originalPath
         guard !path.isEmpty else {
-            debugLog("skip \(meta.transferName): originalPath is empty")
+            debugLog("skip \(a.transferName): originalPath is empty")
             return nil
         }
         guard FileManager.default.fileExists(atPath: path) else {
-            debugLog("skip \(meta.transferName): file does not exist at \(path)")
+            debugLog("skip \(a.transferName): file does not exist at \(path)")
             return nil
         }
 
@@ -124,7 +124,7 @@ enum InlineImageRenderer {
         let sourcePath: String
         if needsConversion {
             guard let converted = sipsConvertToPNG(path) else {
-                debugLog("skip \(meta.transferName): sips conversion failed for \(path)")
+                debugLog("skip \(a.transferName): sips conversion failed for \(path)")
                 return nil
             }
             sourcePath = converted
