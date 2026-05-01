@@ -26,20 +26,19 @@ Read-only. macOS 14+. arm64.
 
 ### Homebrew (recommended)
 
-Phase A — the formula lives in this repo, so you tap the source directly:
+```sh
+brew tap supaku/tools
+brew install --cask kith
+```
+
+Pulls the signed + notarized arm64 binary from the latest [GitHub Release](https://github.com/supaku/kith/releases). The cask is auto-bumped on every tag push — see [RELEASING.md](./RELEASING.md) for how that works.
+
+### Build from source
+
+If you'd rather compile locally — useful on machines without an `arm64` Homebrew, or for development — `Formula/kith.rb` ships a build-from-source formula:
 
 ```sh
 brew tap supaku/kith https://github.com/supaku/kith
-brew install kith
-```
-
-Builds from source via your Swift toolchain. No signed-binary downloads in
-this phase. Phase B will migrate the formula to a `supaku/tools` tap with
-signed/notarized bottles:
-
-```sh
-# Phase B (not yet shipped)
-brew tap supaku/tools
 brew install kith
 ```
 
