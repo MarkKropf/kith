@@ -84,16 +84,24 @@ jobs:
       - name: swift build -c release
         run: swift build -c release --arch arm64
 
+      - name: Stage Kith.app + CLI
+        # v0.2.0+ flow: package.sh has two subcommands. `stage` assembles
+        # dist/staging/{kith, libexec/, Kith.app/}; sign-and-notarize.sh then
+        # signs in place; `tarball` zips the (signed) staging dir into the
+        # release artifact. Keeps the codesign step inside the .app bundle
+        # boundary so notarytool/stapler can attest the whole layout.
+        run: bash scripts/package.sh stage dist/staging
+
       - name: Sign + notarize
         if: ${{ env.APPLE_DEVELOPER_ID_CERT_BASE64 != '' }}
-        run: scripts/sign-and-notarize.sh .build/release/kith
+        run: scripts/sign-and-notarize.sh dist/staging
 
       - name: Package tarball
         id: package
         run: |
           set -euo pipefail
           ARCHIVE="dist/kith-${{ steps.version.outputs.version }}-macos-arm64.tar.gz"
-          bash scripts/package.sh "$ARCHIVE"
+          bash scripts/package.sh tarball dist/staging "$ARCHIVE"
           SHA256="$(shasum -a 256 "$ARCHIVE" | awk '{print $1}')"
           echo "$SHA256  $(basename "$ARCHIVE")" > "$ARCHIVE.sha256"
           echo "archive=${ARCHIVE}" >> "$GITHUB_OUTPUT"
@@ -101,23 +109,35 @@ jobs:
           ls -lh dist/
 
       - name: Smoke test packaged tarball
-        # Extracts the artifact users will actually receive and exercises a
-        # phone-parse path so a missing SwiftPM resource bundle would be
-        # caught before the release goes out. scripts/release-rehearsal.sh
-        # runs the same checks locally before tagging.
+        # Extracts the artifact users will actually receive and exercises
+        # the resource-bundle load path. v0.2.0+ requires KITH_DB_PATH
+        # because `chats` otherwise tries to round-trip via the agent
+        # (which doesn't exist in CI). KITH_DB_PATH triggers the CLI's
+        # local-mode fallback, which still loads SwiftPM resource bundles.
         run: |
           set -euo pipefail
           EXTRACT="$(mktemp -d)"
           tar -C "$EXTRACT" -xzf "${{ steps.package.outputs.archive }}"
+          for needed in kith libexec/kith Kith.app/Contents/Info.plist \
+                        Kith.app/Contents/MacOS/KithApp \
+                        Kith.app/Contents/MacOS/KithAgent \
+                        Kith.app/Contents/Library/LaunchAgents/com.supaku.kith.agent.plist \
+                        Kith.app/Contents/Resources/PhoneNumberKit_PhoneNumberKit.bundle \
+                        Kith.app/Contents/Resources/SQLite.swift_SQLite.bundle; do
+            if [[ ! -e "$EXTRACT/$needed" ]]; then
+              echo "::error::tarball missing $needed"
+              exit 1
+            fi
+          done
           ln -s "$EXTRACT/kith" "$EXTRACT/kith-link"
           "$EXTRACT/kith-link" version
-          OUTPUT="$("$EXTRACT/kith-link" chats --participant '+14155551212' 2>&1 || true)"
+          OUTPUT="$(KITH_DB_PATH="/tmp/kith-ci-nonexistent.db" "$EXTRACT/kith-link" chats --jsonl 2>&1 || true)"
           echo "$OUTPUT"
           if echo "$OUTPUT" | grep -q "could not load resource bundle"; then
             echo "::error::SwiftPM resource bundle missing from packaged tarball"
             exit 1
           fi
-          echo "==> packaged tarball loads SwiftPM resource bundles correctly"
+          echo "==> packaged tarball layout verified + resource bundles load"
 
       - name: Create or update GitHub Release
         uses: softprops/action-gh-release@v2
