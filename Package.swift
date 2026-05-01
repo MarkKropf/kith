@@ -118,6 +118,8 @@ let package = Package(
             exclude: [
                 "Resources/Info.plist",
                 "Resources/com.supaku.kith.agent.plist",
+                "Resources/AppIcon.icns",
+                "Resources/AppIcon.svg",
             ]
         ),
         .testTarget(name: "ContactsCoreTests", dependencies: ["ContactsCore"]),

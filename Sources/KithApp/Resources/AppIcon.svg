@@ -1,0 +1,8 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" role="img" aria-labelledby="title desc">
+  <title id="title">Supaku mark (color)</title>
+  <desc id="desc">Deep blue background with a white bolt and a spark dot.</desc>
+
+  <rect x="32" y="32" width="448" height="448" rx="128" fill="#1E3A8A"/>
+  <path d="M300 92 L184 276 H270 L212 420 L356 236 H270 Z" fill="#F8FAFC" shape-rendering="geometricPrecision"/>
+  <circle cx="382" cy="138" r="22" fill="#60A5FA"/>
+</svg>

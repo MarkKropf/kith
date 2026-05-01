@@ -103,23 +103,28 @@ WRAPPER
   cp .build/release/kith-agent  "$APP/Contents/MacOS/KithAgent"
   chmod +x "$APP/Contents/MacOS/KithApp" "$APP/Contents/MacOS/KithAgent"
 
-  # The agent is a fully-fledged binary with its own bundle identifier in
-  # codesigning, but it lives under Kith.app/Contents/MacOS rather than
-  # XPCServices/ so launchd can run it as a plain LaunchAgent.
+  # SwiftPM resource bundles are plain directories with a `.bundle` suffix
+  # containing raw resource files (no Info.plist, no CFBundleIdentifier).
+  # Canonical location is Contents/Resources/ where they get sealed into
+  # the parent .app's normal resource-hash chain.
   #
-  # SwiftPM resource bundles are NOT macOS bundle directories — they're plain
-  # directories with a `.bundle` suffix containing raw resource files (no
-  # Info.plist, no CFBundleIdentifier). Putting them next to the executable
-  # in Contents/MacOS/ makes codesign reject them as "bundle format
-  # unrecognized" because it tries to treat them like nested code bundles.
-  # The fix is to put them in Contents/Resources/ where they get sealed into
-  # the parent .app's normal resource-hash chain. SwiftPM's Bundle.module
-  # lookup checks `Bundle.main.resourceURL` first, which for an executable
-  # running inside an .app resolves to Contents/Resources/ — so the agent
-  # still finds the bundles at runtime.
+  # PhoneNumberKit's SwiftPM-generated `Bundle.module` accessor only checks
+  # `Bundle.main.bundleURL/PhoneNumberKit_….bundle` — and inside an .app
+  # that's `/Applications/Kith.app/PhoneNumberKit_….bundle`, NOT
+  # `Contents/Resources/`. We sidestep that by overriding PhoneNumberKit's
+  # `metadataCallback` in KithPhoneNumberNormalizer to search several
+  # paths (incl. `Bundle.main.resourceURL/…`) — see
+  # Sources/MessagesCore/Extensions/KithPhoneNumberNormalizer.swift. So
+  # bundles can stay in Contents/Resources/ without symlink hacks.
   for bundle in "${REQUIRED_BUNDLES[@]}"; do
     cp -R ".build/release/$bundle" "$APP/Contents/Resources/"
   done
+
+  # App icon — pre-rendered AppIcon.icns produced by scripts/make-icon.sh
+  # from Sources/KithApp/Resources/AppIcon.svg. Checked-in so CI doesn't
+  # need an SVG toolchain. Without this, Kith.app shows up in System
+  # Settings → Login Items (and elsewhere) as a generic blank tile.
+  cp Sources/KithApp/Resources/AppIcon.icns                     "$APP/Contents/Resources/AppIcon.icns"
 
   # Info.plist + embedded LaunchAgent plist. These two files are excluded
   # from the SwiftPM compile via Package.swift's `exclude:` lists; they live

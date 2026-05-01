@@ -129,21 +129,33 @@ public final class KithAgentClient: @unchecked Sendable {
 
     // MARK: - Bootstrap-and-retry plumbing
 
-    /// Run `block`. If it surfaces `agentUnreachable`, run a one-time
-    /// bootstrap (`open -a Kith.app --args register`), wait for the Mach
-    /// service to register, and retry the block once.
+    /// Run `block`. If it surfaces `agentUnreachable` (no Mach service)
+    /// OR `clientNotAccepted` (signing requirement mismatch — usually
+    /// caused by a stale registration pointing at an old bundle), run a
+    /// one-time bootstrap (`open -a Kith.app --args register`), wait for
+    /// the Mach service, and retry the block once.
+    ///
+    /// `clientNotAccepted` is treated as bootstrap-eligible because the
+    /// fix in practice is always the same: re-run SMAppService.register()
+    /// against the canonical bundle path, which updates BTM to point at
+    /// the current install location.
     private func retryAfterBootstrap<R>(_ block: () async throws -> R) async throws -> R {
         do {
             return try await self.invoke(block)
         } catch let err as KithAgentClientError {
-            guard case .agentUnreachable = err else { throw err }
+            switch err {
+            case .agentUnreachable, .clientNotAccepted:
+                break
+            default:
+                throw err
+            }
             do {
                 try await Self.runBootstrap()
             } catch let bootErr {
                 throw KithAgentClientError.bootstrapFailed(bootstrap: bootErr, original: err)
             }
             // Retry once. Anything that surfaces from this attempt — including
-            // a second `agentUnreachable` — is the final answer.
+            // a second connectivity error — is the final answer.
             return try await self.invoke(block)
         }
     }
@@ -219,7 +231,15 @@ public final class KithAgentClient: @unchecked Sendable {
             || message.contains("no such file") {
             return KithAgentClientError.agentUnreachable(underlying: error)
         }
-        if message.contains("not accepted") || message.contains("code signing requirement") {
+        // SecureXPC raises `.insecure` when the connection's audit token
+        // doesn't satisfy the server's client requirement. In practice the
+        // common cause is a stale agent registration pointing at an old
+        // bundle path that doesn't match the freshly-installed CLI's
+        // signature. Lump it with `clientNotAccepted` so the bootstrap
+        // retry path re-registers SMAppService against the current bundle.
+        if message.contains("not accepted")
+            || message.contains("code signing requirement")
+            || message.contains("insecure") {
             return KithAgentClientError.clientNotAccepted
         }
         return KithAgentClientError.agentReturnedError(underlying: error)
