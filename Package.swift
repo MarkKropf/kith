@@ -7,6 +7,7 @@ let package = Package(
     products: [
         .executable(name: "kith",       targets: ["kith"]),
         .executable(name: "kith-agent", targets: ["KithAgent"]),
+        .executable(name: "KithApp",    targets: ["KithApp"]),
         .library(name: "ContactsCore",       targets: ["ContactsCore"]),
         .library(name: "MessagesCore",       targets: ["MessagesCore"]),
         .library(name: "ResolveCore",        targets: ["ResolveCore"]),
@@ -82,6 +83,18 @@ let package = Package(
                     "-Xlinker", "__info_plist",
                     "-Xlinker", "Sources/kith/Resources/Info.plist",
                 ])
+            ]
+        ),
+        // Headless bootstrap target. Built as a Mach-O executable that gets
+        // wrapped into Kith.app/Contents/MacOS/KithApp by scripts/package.sh.
+        // The Info.plist + LaunchAgent plist are bundled into the .app's
+        // Contents/ tree at package time (NOT linked into the binary), so
+        // SMAppService's plistName lookup resolves them at runtime.
+        .executableTarget(
+            name: "KithApp",
+            exclude: [
+                "Resources/Info.plist",
+                "Resources/com.supaku.kith.agent.plist",
             ]
         ),
         .testTarget(name: "ContactsCoreTests", dependencies: ["ContactsCore"]),

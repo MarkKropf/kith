@@ -1,0 +1,32 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <!-- Embedded LaunchAgent for kith. Lives at
+         Kith.app/Contents/Library/LaunchAgents/com.supaku.kith.agent.plist
+         and is registered with launchd by KithApp via SMAppService.
+
+         BundleProgram is resolved relative to the parent .app's bundle, so
+         this works regardless of where Kith.app is installed (/Applications,
+         ~/Applications, etc.).
+    -->
+    <key>Label</key>
+    <string>com.supaku.kith.agent</string>
+    <key>BundleProgram</key>
+    <string>Contents/MacOS/KithAgent</string>
+    <key>MachServices</key>
+    <dict>
+        <key>com.supaku.kith.agent</key>
+        <true/>
+    </dict>
+    <!-- On-demand launch: the agent process starts when the first XPC
+         message lands on the Mach service and exits when idle. KeepAlive
+         could be enabled later if startup latency becomes a UX concern. -->
+    <key>RunAtLoad</key>
+    <false/>
+    <key>KeepAlive</key>
+    <false/>
+    <key>ProcessType</key>
+    <string>Interactive</string>
+</dict>
+</plist>

@@ -1,0 +1,35 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <key>CFBundleDevelopmentRegion</key>
+    <string>en</string>
+    <key>CFBundleExecutable</key>
+    <string>KithApp</string>
+    <key>CFBundleIdentifier</key>
+    <string>com.supaku.kith</string>
+    <key>CFBundleInfoDictionaryVersion</key>
+    <string>6.0</string>
+    <key>CFBundleName</key>
+    <string>kith</string>
+    <key>CFBundleDisplayName</key>
+    <string>Kith</string>
+    <key>CFBundlePackageType</key>
+    <string>APPL</string>
+    <key>CFBundleShortVersionString</key>
+    <string>0.2.0</string>
+    <key>CFBundleVersion</key>
+    <string>0.2.0</string>
+    <key>LSMinimumSystemVersion</key>
+    <string>14.0</string>
+    <!-- LSUIElement: no Dock icon, no menu bar. The .app exists only to be a
+         TCC-grantable identity that registers + holds the agent. -->
+    <key>LSUIElement</key>
+    <true/>
+    <!-- TCC-relevant usage descriptions. The agent uses these via Bundle.main
+         when it makes its CNContactStore / chat.db calls; the system prompt
+         is presented as "Kith" and reads the message string below. -->
+    <key>NSContactsUsageDescription</key>
+    <string>Kith reads local Contacts to resolve names to people and chats.</string>
+</dict>
+</plist>
