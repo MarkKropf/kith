@@ -1,5 +1,10 @@
 # kith
 
+[![CI](https://github.com/supaku/kith/actions/workflows/ci.yml/badge.svg?branch=main)](https://github.com/supaku/kith/actions/workflows/ci.yml)
+[![Release](https://img.shields.io/github/v/release/supaku/kith?label=release&sort=semver)](https://github.com/supaku/kith/releases)
+[![License: MIT](https://img.shields.io/github/license/supaku/kith)](./LICENSE)
+[![macOS 14+](https://img.shields.io/badge/macOS-14%2B-blue)](https://github.com/supaku/kith#permissions)
+
 > A macOS CLI that bridges Apple Contacts and iMessage for terminal users and AI agents.
 
 `kith` resolves a name to a person to a chat. The killer flow:
@@ -264,7 +269,7 @@ better than a phone number.
 | `Tests/*Tests` | Swift Testing test suites |
 | `Formula/kith.rb` | Homebrew formula (build-from-source) |
 | `.github/workflows/` | CI + release |
-| `docs/PLAN.md` | v1 architecture plan (single source of truth) |
+| `.claude/PLAN.md` | v1 architecture plan (single source of truth) |
 
 `THIRD_PARTY_NOTICES.md` carries the MIT attribution + full license text for
 vendored sources.
