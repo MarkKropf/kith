@@ -22,6 +22,21 @@ Read-only. macOS 14+. arm64.
 
 ---
 
+## Where kith fits
+
+If you've been wiring iMessage into agents on macOS, you're probably already using Peter Steinberger's [imsg](https://github.com/steipete/imsg). It solves the messaging primitive cleanly (read and send, both directions) and is MIT-licensed.
+
+`kith` vendors imsg's `MessagesCore` as its base layer (see [THIRD_PARTY_NOTICES.md](./THIRD_PARTY_NOTICES.md)) and adds the layer that was missing for me on the read side: contact resolution.
+
+The shape of the difference:
+
+- imsg accepts handles directly: phone numbers, emails, chat IDs. It can also send.
+- kith starts with a name, walks `CNContactStore`, collects the contact's full set of phones (E.164) and emails, and joins them against `~/Library/Messages/chat.db` to land on the canonical 1:1 conversation. Stable across renames and contact merges, because the resolution is anchored on the stable `CNContact` UUID, not on a phone number or display name.
+
+Same underlying message database. Apple Contacts joined on top. Read-only by design today; sending stays imsg's job.
+
+---
+
 ## Install
 
 ### Homebrew (recommended)
@@ -31,11 +46,11 @@ brew tap supaku/tools
 brew install --cask kith
 ```
 
-Pulls the signed + notarized arm64 binary from the latest [GitHub Release](https://github.com/supaku/kith/releases). The cask is auto-bumped on every tag push — see [RELEASING.md](./RELEASING.md) for how that works.
+Pulls the signed + notarized arm64 binary from the latest [GitHub Release](https://github.com/supaku/kith/releases). The cask is auto-bumped on every tag push. See [RELEASING.md](./RELEASING.md) for how that works.
 
 ### Build from source
 
-If you'd rather compile locally — useful on machines without an `arm64` Homebrew, or for development — `Formula/kith.rb` ships a build-from-source formula:
+If you'd rather compile locally (useful on machines without an `arm64` Homebrew, or for development), `Formula/kith.rb` ships a build-from-source formula:
 
 ```sh
 brew tap supaku/kith https://github.com/supaku/kith
@@ -51,7 +66,7 @@ swift build -c release
 cp .build/release/kith ~/bin/   # or anywhere on $PATH
 ```
 
-Or use the bundled script — it stamps `BuildInfo.swift` with the current commit
+Or use the bundled script. It stamps `BuildInfo.swift` with the current commit
 SHA + ISO build timestamp:
 
 ```sh
@@ -68,7 +83,7 @@ KITH_SIGN_IDENTITY="Developer ID Application: Your Name (TEAMID)" scripts/build.
 
 ## Permissions
 
-`kith` needs two macOS permission grants. Run `kith doctor` first — it tells
+`kith` needs two macOS permission grants. Run `kith doctor` first. It tells
 you exactly what's missing and how to fix it.
 
 ### 1. Contacts
@@ -79,7 +94,7 @@ terminal isn't pre-listed in **System Settings → Privacy & Security → Contac
 - Click `+`, navigate to your terminal app (Ghostty, iTerm, Terminal, etc.), add it.
 - For Electron apps (VS Code), you must `+`-add manually since they don't declare
   `NSContactsUsageDescription`.
-- **Cmd+Q to fully quit your terminal**, then relaunch — TCC grants only inherit
+- **Cmd+Q to fully quit your terminal**, then relaunch. TCC grants only inherit
   on a fresh process tree.
 
 ### 2. Full Disk Access
@@ -87,12 +102,12 @@ terminal isn't pre-listed in **System Settings → Privacy & Security → Contac
 Required to read `~/Library/Messages/chat.db`. There is no programmatic prompt:
 
 - **System Settings → Privacy & Security → Full Disk Access**.
-- Add your *terminal* (not the `kith` binary itself — FDA is inherited by child
+- Add your *terminal* (not the `kith` binary itself; FDA is inherited by child
   processes).
 - Restart the terminal.
 
 If `kith doctor --json` reports `permissions.fullDiskAccess.status: "denied"`,
-the most common fix is the quit-and-relaunch step — toggling the switch while
+the most common fix is the quit-and-relaunch step. Toggling the switch while
 the terminal is running won't take effect.
 
 ---
@@ -143,7 +158,7 @@ interpreted as chat IDs. Multiple chat-ids can be unioned via
 
 The default behavior auto-prefers the canonical 1:1 conversation (chat where
 `chat_identifier` matches an identity, no `display_name`, exactly one other
-participant) — group chats and named threads are excluded. When the resolution
+participant). Group chats and named threads are excluded. When the resolution
 spans multiple 1:1 shards (chat-id rotation), they're unioned silently. When
 only group chats match, kith exits 4 with the candidate list so you can pick
 explicitly.
@@ -193,12 +208,12 @@ Color is automatic when stdout is a TTY. Override via `--color {auto,always,neve
 `kith history --inline` renders attachment images directly in the terminal
 when one of these is detected:
 
-- **iTerm2** (`TERM_PROGRAM=iTerm.app`) — iTerm2 inline image protocol.
-- **VS Code's integrated terminal** (`TERM_PROGRAM=vscode`) — same protocol.
-- **WezTerm** (`TERM_PROGRAM=WezTerm`) — same protocol.
+- **iTerm2** (`TERM_PROGRAM=iTerm.app`): iTerm2 inline image protocol.
+- **VS Code's integrated terminal** (`TERM_PROGRAM=vscode`): same protocol.
+- **WezTerm** (`TERM_PROGRAM=WezTerm`): same protocol.
 - **Ghostty** (any of `GHOSTTY_RESOURCES_DIR`, `GHOSTTY_BIN_DIR`,
-  `GHOSTTY_VERSION`, `TERM_PROGRAM=ghostty`) — Kitty graphics protocol.
-- **Kitty / KITTY_WINDOW_ID set** — Kitty graphics protocol.
+  `GHOSTTY_VERSION`, `TERM_PROGRAM=ghostty`): Kitty graphics protocol.
+- **Kitty / KITTY_WINDOW_ID set**: Kitty graphics protocol.
 
 If none match, `--inline` silently falls back to `[attachment: <name>]` text.
 Force the protocol with `KITH_INLINE_PROTOCOL=kitty|iterm2|none` (helpful inside
@@ -231,7 +246,7 @@ transmission. Animated GIFs render as a still on Kitty-protocol terminals.
 tool call:
 
 ```sh
-# Native shape — ideal for an in-house tool registry.
+# Native shape. Ideal for an in-house tool registry.
 kith tools manifest --style kith
 
 # Drop straight into an Anthropic Messages API tools[] array.
@@ -252,7 +267,7 @@ For BI/observability use cases, the typical recipe is:
    `fullName` (the CNContact UUID is stable; a future-proof handle).
 4. `kith history --with <id> --jsonl --limit 200` to stream messages.
 
-Pin the contact UUID in your records — it survives renames and contact merges
+Pin the contact UUID in your records. It survives renames and contact merges
 better than a phone number.
 
 ---
@@ -263,7 +278,7 @@ better than a phone number.
 |------|------|
 | `Sources/kith` | the executable + manifest projections |
 | `Sources/ContactsCore` | `CNContactStore` wrapper + `Contact`/`ContactGroup` models |
-| `Sources/MessagesCore` | vendored from [imsg](https://github.com/steipete/imsg) (MIT) — sync via `scripts/vendor-sync.sh` |
+| `Sources/MessagesCore` | vendored from [imsg](https://github.com/steipete/imsg) (MIT); sync via `scripts/vendor-sync.sh` |
 | `Sources/ResolveCore` | the `--with` parser + cross-domain `Resolver` |
 | `Tests/*Tests` | Swift Testing test suites |
 | `Formula/kith.rb` | Homebrew formula (build-from-source) |
@@ -290,7 +305,7 @@ or FDA grants.
 
 ## License
 
-MIT — see `LICENSE`. Vendored MessagesCore is also MIT (Peter Steinberger);
+MIT. See `LICENSE`. Vendored MessagesCore is also MIT (Peter Steinberger);
 see `THIRD_PARTY_NOTICES.md` for attribution.
 
 A [Supaku Labs](https://github.com/supaku) project.
